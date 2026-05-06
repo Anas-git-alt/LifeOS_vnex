@@ -1,3 +1,0 @@
-# Habits
-
-Status: scaffold

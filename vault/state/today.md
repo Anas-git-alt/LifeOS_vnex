@@ -1,3 +1,0 @@
-# Today
-
-Status: scaffold

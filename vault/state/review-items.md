@@ -1,3 +1,0 @@
-# Review Items
-
-Status: scaffold

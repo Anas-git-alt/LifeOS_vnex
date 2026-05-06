@@ -1,3 +1,0 @@
-# Research Queue
-
-Status: scaffold

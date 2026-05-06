@@ -1,3 +1,0 @@
-# Reminders
-
-Status: scaffold

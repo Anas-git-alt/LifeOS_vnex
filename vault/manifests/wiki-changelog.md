@@ -1,3 +1,0 @@
-# Wiki Changelog
-
-Status: scaffold

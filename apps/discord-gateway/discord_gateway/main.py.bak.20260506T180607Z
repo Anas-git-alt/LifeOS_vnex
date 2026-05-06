@@ -307,17 +307,9 @@ async def run_discord_gateway(token: str, client: LifeOSApiClient) -> None:
                         if event == "READY":
                             print(f"discord-gateway ready session_id={data.get('session_id')}", flush=True)
                         elif event == "INTERACTION_CREATE":
-                            threading.Thread(
-                                target=handle_interaction,
-                                args=(token, client, data, owner_id),
-                                daemon=True,
-                            ).start()
+                            handle_interaction(token, client, data, owner_id)
                         elif event == "MESSAGE_CREATE":
-                            threading.Thread(
-                                target=handle_message,
-                                args=(token, client, data, owner_id),
-                                daemon=True,
-                            ).start()
+                            handle_message(token, client, data, owner_id)
                         continue
 
                     if op in {7, 9}:
@@ -370,114 +362,48 @@ async def _identify(
 def handle_interaction(token: str, client: LifeOSApiClient, data: dict[str, Any], owner_id: str) -> None:
     interaction_id = str(data["id"])
     interaction_token = str(data["token"])
+    if not _is_owner(data, owner_id):
+        respond_interaction(token, interaction_id, interaction_token, ephemeral("Not authorized."))
+        return
     kind = int(data.get("type", 0))
-    app_id = str(data.get("application_id") or os.getenv("DISCORD_APPLICATION_ID") or "")
-    acknowledged = False
-
-    print(
-        f"discord-gateway interaction received kind={kind} id={interaction_id} channel={data.get('channel_id')}",
-        flush=True,
-    )
-
     try:
-        if not _is_owner(data, owner_id):
-            respond_interaction(token, interaction_id, interaction_token, ephemeral("Not authorized."))
-            acknowledged = True
-            return
-
-        # Slash command.
         if kind == 2:
             respond_interaction(token, interaction_id, interaction_token, {"type": 5})
-            acknowledged = True
-
             try:
                 text = handle_slash(token, client, data)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - post concise deferred failure
                 text = f"LifeOS failed: {exc}"
-                print(f"discord-gateway slash error: {exc}", flush=True)
-
             try:
-                edit_interaction_response(app_id, interaction_token, {"content": text[:1900]})
-            except Exception as exc:  # noqa: BLE001
-                print(f"discord-gateway slash delivery fallback: {exc}", flush=True)
+                edit_interaction_response(
+                    str(data.get("application_id") or os.getenv("DISCORD_APPLICATION_ID") or ""),
+                    interaction_token,
+                    {"content": text[:1900]},
+                )
+            except Exception as exc:  # noqa: BLE001 - deferred interactions cannot be acknowledged twice
                 channel_id = data.get("channel_id")
                 if channel_id:
-                    post_discord_message(
-                        token,
-                        str(channel_id),
-                        {"content": f"{text[:1800]}\n\n(delivery fallback: {exc})"},
-                    )
-            return
-
-        # Button/component.
-        if kind == 3:
+                    post_discord_message(token, str(channel_id), {"content": f"{text[:1800]}\n\n(delivery fallback: {exc})"})
+        elif kind == 3:
             payload = handle_component(data)
-
-            # Correct/clarify need to open a modal immediately.
             if payload["type"] == "modal":
                 respond_interaction(token, interaction_id, interaction_token, payload["payload"])
-                acknowledged = True
-                return
-
-            # Acknowledge Discord immediately, then do LifeOS work.
-            respond_interaction(
-                token,
-                interaction_id,
-                interaction_token,
-                ephemeral(f"Processing review {payload['decision']}..."),
-            )
-            acknowledged = True
-
-            try:
+            else:
                 result = client.post(
                     f"/api/reviews/{quote(str(payload['review_id']))}/decision",
                     payload["payload"],
                 )
-                text = f"Review {payload['decision']}: {result.get('status')}"
-            except Exception as exc:  # noqa: BLE001
-                text = f"LifeOS review decision failed: {exc}"
-                print(f"discord-gateway review decision error: {exc}", flush=True)
-
-            channel_id = data.get("channel_id")
-            if channel_id:
-                try:
-                    post_discord_message(token, str(channel_id), {"content": text[:1900]})
-                except Exception as exc:  # noqa: BLE001
-                    print(f"discord-gateway review result post error: {exc}", flush=True)
-            return
-
-        # Modal submit.
-        if kind == 5:
-            respond_interaction(token, interaction_id, interaction_token, {"type": 5})
-            acknowledged = True
-
-            try:
-                text = handle_modal(client, data)
-            except Exception as exc:  # noqa: BLE001
-                text = f"LifeOS modal failed: {exc}"
-                print(f"discord-gateway modal error: {exc}", flush=True)
-
-            try:
-                edit_interaction_response(app_id, interaction_token, {"content": text[:1900]})
-            except Exception as exc:  # noqa: BLE001
-                print(f"discord-gateway modal delivery fallback: {exc}", flush=True)
-                channel_id = data.get("channel_id")
-                if channel_id:
-                    post_discord_message(token, str(channel_id), {"content": text[:1900]})
-            return
-
-    except Exception as exc:  # noqa: BLE001
-        print(f"discord-gateway interaction error: {exc}", flush=True)
-        if not acknowledged:
-            try:
                 respond_interaction(
                     token,
                     interaction_id,
                     interaction_token,
-                    ephemeral(f"LifeOS failed: {exc}"),
+                    message(f"Review {payload['decision']}: {result.get('status')}"),
                 )
-            except Exception as ack_exc:  # noqa: BLE001
-                print(f"discord-gateway interaction ack error: {ack_exc}", flush=True)
+        elif kind == 5:
+            result = handle_modal(client, data)
+            respond_interaction(token, interaction_id, interaction_token, message(result))
+    except Exception as exc:  # noqa: BLE001 - gateway must return short user-visible failure
+        respond_interaction(token, interaction_id, interaction_token, ephemeral(f"LifeOS failed: {exc}"))
+
 
 def handle_slash(token: str, client: LifeOSApiClient, data: dict[str, Any]) -> str:
     command = parse_lifeos_command(data.get("data", {}))
