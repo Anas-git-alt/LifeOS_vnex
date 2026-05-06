@@ -167,6 +167,35 @@ review_card_buttons:
   - snooze
   - reject
 
+session_routing:
+  default_agent_id: orchestrator
+  default_iteration_cap: 5
+  normal_owner_messages_create_sessions: true
+  thread_bindings_enabled: true
+  channel_default_agents:
+    quick-capture: orchestrator
+    daily-plan: daily-planner
+    work-tracker: work.generic
+    finance-tracker: finance
+    prayer-tracker: deen-prayer
+    habits-health: health-fitness
+    family-commitments: family-commitments
+    research-lab: research
+    system-notifications: systems-devops
+  compact_status_events:
+    - message.received
+    - agent.selected
+    - agent.iteration_started
+    - handoff.created
+    - tool.call_started
+    - review.created
+    - clarification.required
+    - autonomous.action.completed
+    - correction.applied
+    - run.completed
+    - run.failed
+    - run.max_iterations_reached
+
 visibility_policy:
   discord_show:
     - user_facing_status

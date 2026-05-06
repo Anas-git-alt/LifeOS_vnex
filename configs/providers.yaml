@@ -87,6 +87,9 @@ agent_models:
     primary:
       provider: openrouter
       model: anthropic/claude-sonnet-4.6
+      models:
+        - anthropic/claude-sonnet-4.6
+        - openai/gpt-5.2
       reasoning_effort: medium
     secondary:
       provider: nvidia_nim
@@ -128,6 +131,64 @@ agent_models:
     primary:
       provider: openrouter
       model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  work.generic:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  finance:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    temperature: 0
+    fallback_allowed: true
+
+  health-fitness:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  family-commitments:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  deen-prayer:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  research:
+    primary:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      models:
+        - anthropic/claude-sonnet-4.6
+        - openai/gpt-5.2
     secondary:
       provider: nvidia_nim
       model: nvidia/nemotron-3-super-120b-a12b

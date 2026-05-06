@@ -1,6 +1,6 @@
 """Tool permission vocabulary."""
 
-from enum import StrEnum
+from lifeos_core.compat import StrEnum
 
 
 class PermissionEffect(StrEnum):

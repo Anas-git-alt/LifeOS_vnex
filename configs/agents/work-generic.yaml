@@ -4,7 +4,13 @@ display_name: Generic Work Agent
 domain: work
 role: specialist
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: work.generic
+max_iterations_default: 5
+system_prompt: |
+  Track generic work commitments without assuming the user's job domain.
+  Learn actual work patterns from approved context and corrections. Create
+  low-risk reversible work notes/tasks when intent is clear.
 responsibilities:
   - track actual work tasks and commitments
   - learn work patterns from reviewed context
@@ -17,6 +23,16 @@ assumptions:
 not_allowed:
   - assume user job identity
   - silently create work tasks from ambiguous captures
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.create_review_item
+  - lifeos.write_preference_candidate
+  - handoff.create
+input_schema:
+  type: agent_task
+output_schema:
+  type: agent_run_result
 memory_policy:
   read_scopes:
     - curated.domains.work
@@ -24,7 +40,8 @@ memory_policy:
     - ledger.linked_work_captures
   write_scopes:
     - review.work_candidates
-  durable_write: review_required
+  durable_write: risk_based_review
+  low_risk_preferences: auto_candidate
 discord:
   default_channel: work-tracker
   review_channel: approval-queue
@@ -32,3 +49,11 @@ discord:
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: work-tracker
+review_requirements:
+  - ambiguous_work_commitment
+  - external_work_communication
+  - high_impact_work_deadline_change
+escalation_rules:
+  - create_clear_low_risk_tasks_autonomously
+  - ask_when_work_domain_or_action_is_unclear

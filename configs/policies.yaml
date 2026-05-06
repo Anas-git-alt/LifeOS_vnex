@@ -3,17 +3,21 @@ version: 1
 invariants:
   - raw_captures_are_immutable
   - ai_drafts_are_not_truth
-  - important_mutations_go_through_approval_manager
+  - important_mutations_go_through_controlled_services
   - discord_is_main_review_surface
   - telegram_is_raw_capture_first
   - every_tool_call_is_logged
   - every_state_mutation_is_audited
   - every_memory_fact_has_evidence
   - sensitive_raw_data_not_indexed_by_default
+  - low_risk_reversible_actions_may_be_autonomous
+  - risky_actions_escalate_before_mutation
 
 approval_levels:
   none:
     description: Read-only or harmless response.
+  autonomous_report_after:
+    description: Low-risk reversible permissioned action can complete, then report.
   confirm_light:
     description: Reaction/button confirmation is enough.
   review_card:
@@ -43,6 +47,9 @@ approval_policy:
     - automation_job_creation_from_natural_language
     - low_confidence_action
   may_auto_apply:
+    - clear_low_risk_reversible_task_or_note
+    - low_risk_behavior_preference_candidate
+    - session_context_update
     - explicit_quick_log_in_correct_tracker_channel
     - prayer_reaction_log_from_owner
     - hydration_reaction_log_from_owner
@@ -74,6 +81,19 @@ memory_policy:
     - not_family_sensitive
     - not_health_sensitive
     - not_inferred_from_vague_text
+  low_risk_preference_auto_candidate:
+    - formatting_preferences
+    - routing_preferences
+    - tool_summary_preferences
+    - do_not_create_reminders_without_explicit_request
+  confirmation_or_review_required:
+    - health_facts
+    - finance_facts
+    - family_obligations
+    - religious_obligations
+    - credentials
+    - identity_facts
+    - long_term_commitments
 
 resurfacing:
   pending_review_default_hours: 24

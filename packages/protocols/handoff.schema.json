@@ -2,27 +2,66 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lifeos.local/protocols/handoff.schema.json",
   "title": "LifeOS Agent Handoff",
-  "type": "object",
-  "required": ["handoff_id", "parent_run_id", "from_agent", "to_agent", "reason", "task", "context_refs", "constraints", "visibility"],
-  "properties": {
-    "handoff_id": { "type": "string" },
-    "parent_run_id": { "type": "string" },
-    "from_agent": { "type": "string" },
-    "to_agent": { "type": "string" },
-    "reason": { "type": "string" },
-    "task": {
+  "oneOf": [
+    { "$ref": "#/$defs/HandoffRequest" },
+    { "$ref": "#/$defs/HandoffResponse" }
+  ],
+  "$defs": {
+    "HandoffRequest": {
       "type": "object",
-      "required": ["type", "summary", "user_visible_goal"],
+      "required": [
+        "handoff_id",
+        "parent_run_id",
+        "from_agent_id",
+        "to_agent_id",
+        "reason",
+        "task",
+        "known_context",
+        "context_refs",
+        "constraints",
+        "expected_output_schema",
+        "risk_level",
+        "visibility",
+        "requires_user_visibility"
+      ],
       "properties": {
-        "type": { "type": "string" },
-        "summary": { "type": "string" },
-        "user_visible_goal": { "type": "string" }
+        "handoff_id": { "type": "string" },
+        "parent_run_id": { "type": "string" },
+        "from_agent_id": { "type": "string" },
+        "to_agent_id": { "type": "string" },
+        "reason": { "type": "string" },
+        "task": { "type": "string" },
+        "known_context": { "type": "array", "items": { "type": "object" } },
+        "context_refs": { "type": "array", "items": { "type": "object" } },
+        "constraints": { "type": "array", "items": { "type": "object" } },
+        "expected_output_schema": { "type": "object" },
+        "risk_level": { "enum": ["safe", "normal", "sensitive", "high"] },
+        "visibility": { "enum": ["discord_compact", "web_full", "private"] },
+        "requires_user_visibility": { "type": "boolean" }
       }
     },
-    "context_refs": { "type": "array", "items": { "type": "object" } },
-    "constraints": { "type": "object" },
-    "expected_output_schema": { "type": "object" },
-    "visibility": { "type": "object" },
-    "created_at": { "type": "string", "format": "date-time" }
+    "HandoffResponse": {
+      "type": "object",
+      "required": [
+        "handoff_id",
+        "status",
+        "summary_md",
+        "result_json",
+        "review_item_id",
+        "clarifying_questions",
+        "next_suggested_agent_id",
+        "evidence_refs"
+      ],
+      "properties": {
+        "handoff_id": { "type": "string" },
+        "status": { "enum": ["completed", "needs_clarification", "needs_approval", "failed"] },
+        "summary_md": { "type": "string" },
+        "result_json": { "type": "object" },
+        "review_item_id": { "type": ["string", "null"] },
+        "clarifying_questions": { "type": "array", "items": { "type": "string" } },
+        "next_suggested_agent_id": { "type": ["string", "null"] },
+        "evidence_refs": { "type": "array", "items": { "type": "object" } }
+      }
+    }
   }
 }

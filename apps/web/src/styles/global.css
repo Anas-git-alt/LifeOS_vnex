@@ -92,7 +92,7 @@ button {
   text-decoration: none;
 }
 
-.nav-item:first-child,
+.nav-item--active,
 .nav-item:hover {
   background: #284852;
 }
@@ -442,6 +442,222 @@ button {
   background: #fff0ed;
 }
 
+.alert-band--green {
+  border-color: #adddc8;
+  color: #0c513f;
+  background: #eefaf5;
+}
+
+.alert-band .icon-button {
+  margin-left: auto;
+  width: 30px;
+  min-height: 30px;
+}
+
+.review-card,
+.settings-row {
+  border: 1px solid #d4dddf;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.review-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.review-card-main {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.review-card h2,
+.settings-row h2,
+.modal h2,
+.detail-stack h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.review-card h2,
+.settings-row h2,
+.modal h2 {
+  font-size: 16px;
+}
+
+.review-card p {
+  max-height: 144px;
+  margin: 6px 0 0;
+  overflow: auto;
+  color: #4e5551;
+  white-space: pre-wrap;
+}
+
+.pill-row,
+.button-row,
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pill-row {
+  margin-top: 10px;
+}
+
+.button-row {
+  justify-content: flex-end;
+}
+
+.small-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #cdd8da;
+  border-radius: 6px;
+  color: #263432;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.small-button--approve,
+.small-button--done {
+  border-color: #8ccbb2;
+  color: #0c513f;
+}
+
+.small-button--reject {
+  border-color: #f0b2a8;
+  color: #7a271e;
+}
+
+.settings-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.4fr) 100px 150px 150px minmax(160px, 1fr) 150px minmax(160px, 1fr) 90px 42px;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+}
+
+.settings-row span {
+  display: block;
+  margin-top: 4px;
+  color: #68716e;
+  font-size: 12px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid #cfdadc;
+  border-radius: 6px;
+  color: #232522;
+  background: #ffffff;
+}
+
+input,
+select {
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+textarea {
+  min-height: 110px;
+  padding: 10px;
+  resize: vertical;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #3d4643;
+  font-size: 13px;
+}
+
+label input[type="checkbox"] {
+  width: 16px;
+}
+
+.form-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.form-submit {
+  justify-self: start;
+}
+
+.review-row--wide {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+}
+
+.run-table-button {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #dfe7e8;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.run-table-button:hover {
+  background: #f1f7f7;
+}
+
+.detail-stack {
+  display: grid;
+  gap: 8px;
+  color: #38413e;
+  font-size: 13px;
+}
+
+.detail-stack h3 {
+  margin-top: 8px;
+  color: #1f302d;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(23 49 58 / 42%);
+}
+
+.modal {
+  display: grid;
+  gap: 14px;
+  width: min(720px, 100%);
+  padding: 18px;
+  border-radius: 8px;
+  border: 1px solid #d4dddf;
+  background: #ffffff;
+  box-shadow: 0 18px 60px rgb(20 34 38 / 22%);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 @media (max-width: 1040px) {
   .shell {
     grid-template-columns: 82px minmax(0, 1fr);
@@ -510,6 +726,7 @@ button {
   }
 
   .review-row,
+  .settings-row,
   .run-table-head,
   .run-table-row {
     grid-template-columns: 1fr;

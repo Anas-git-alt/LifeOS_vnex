@@ -2,7 +2,7 @@
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from lifeos_core.ids import new_id
@@ -30,3 +30,4 @@ class EventStream:
 
     def recent(self) -> list[StatusEvent]:
         return list(self._events)
+from lifeos_core.compat import UTC

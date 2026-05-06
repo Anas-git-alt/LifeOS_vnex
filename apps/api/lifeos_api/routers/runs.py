@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lifeos_api.db.models import AgentRun, Handoff, StatusEventRow, ToolCall
+from lifeos_api.db.models import AgentRun, AuditEvent, Handoff, ProviderCallLog, ReviewItem, StatusEventRow, ToolCall
 from lifeos_api.deps import db_session_dep
 from lifeos_api.services.serialization import row_to_dict
 
@@ -23,6 +23,11 @@ RUN_FIELDS = [
     "cost_usd",
     "token_usage_json",
     "trace_id",
+    "iteration_cap",
+    "current_iteration",
+    "cancel_requested",
+    "cancelled_at",
+    "result_json",
     "created_at",
     "updated_at",
     "finished_at",
@@ -55,6 +60,25 @@ async def get_run(run_id: str, session: AsyncSession = Depends(db_session_dep)) 
     tools = (
         await session.scalars(select(ToolCall).where(ToolCall.run_id == run_id).order_by(ToolCall.created_at))
     ).all()
+    reviews = []
+    if run.root_capture_id:
+        reviews = (
+            await session.scalars(
+                select(ReviewItem)
+                .where(ReviewItem.source_capture_id == run.root_capture_id)
+                .order_by(ReviewItem.created_at)
+            )
+        ).all()
+    provider_calls = (
+        await session.scalars(
+            select(ProviderCallLog).where(ProviderCallLog.run_id == run_id).order_by(ProviderCallLog.created_at)
+        )
+    ).all()
+    audit_events = (
+        await session.scalars(
+            select(AuditEvent).where(AuditEvent.trace_id == run.trace_id).order_by(AuditEvent.created_at)
+        )
+    ).all()
     return {
         "run": row_to_dict(run, RUN_FIELDS),
         "events": [
@@ -85,6 +109,38 @@ async def get_run(run_id: str, session: AsyncSession = Depends(db_session_dep)) 
                 ["id", "run_id", "agent_id", "tool_id", "status", "input_json", "output_json", "created_at"],
             )
             for tool in tools
+        ],
+        "review_items": [
+            row_to_dict(
+                review,
+                ["id", "kind", "title", "status", "risk_level", "sensitivity", "created_at", "updated_at"],
+            )
+            for review in reviews
+        ],
+        "provider_calls": [
+            row_to_dict(
+                call,
+                [
+                    "id",
+                    "provider_id",
+                    "model",
+                    "key_label",
+                    "status",
+                    "latency_ms",
+                    "input_tokens",
+                    "output_tokens",
+                    "error_json",
+                    "created_at",
+                ],
+            )
+            for call in provider_calls
+        ],
+        "audit_events": [
+            row_to_dict(
+                event,
+                ["id", "actor_type", "actor_id", "event_type", "entity_type", "entity_id", "summary", "created_at"],
+            )
+            for event in audit_events
         ],
     }
 

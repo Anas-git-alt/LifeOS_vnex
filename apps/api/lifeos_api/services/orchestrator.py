@@ -2,7 +2,7 @@
 
 This is the executable Phase 4/5 spine. It deliberately avoids pretending to be
 an LLM; providers can later replace the draft step while preserving the same
-review-gated contracts.
+escalation-gated contracts.
 """
 
 from __future__ import annotations
@@ -49,7 +49,9 @@ def draft_from_capture(*, capture_id: str, raw_text: str | None, platform: str) 
         return _work_draft(capture_id, text)
     if _looks_like_research(lower):
         return _research_draft(capture_id, text)
-    return _memory_draft(capture_id, text)
+    if _looks_like_memory(lower):
+        return _memory_draft(capture_id, text)
+    return _raw_note_draft(capture_id, text)
 
 
 def _looks_like_finance(lower: str) -> bool:
@@ -74,6 +76,10 @@ def _looks_like_prayer(lower: str) -> bool:
 
 def _looks_like_research(lower: str) -> bool:
     return any(token in lower for token in ["research", "find sources", "investigate", "compare", "summarize"])
+
+
+def _looks_like_memory(lower: str) -> bool:
+    return any(token in lower for token in ["remember that", "important:", "save this", "memory:"])
 
 
 def _looks_like_job(lower: str) -> bool:
@@ -290,6 +296,29 @@ def _memory_draft(capture_id: str, text: str) -> Draft:
                 "evidence_refs": [{"kind": "raw_capture", "id": capture_id}],
             },
         },
+    )
+
+
+def _raw_note_draft(capture_id: str, text: str) -> Draft:
+    statement = text or "Empty capture"
+    return Draft(
+        agent_id="memory-curator",
+        domain="ledger",
+        sensitivity="normal",
+        intent_labels=["raw_note"],
+        confidence=0.88,
+        risk_level="safe_internal_read",
+        title="Raw note archived",
+        body_md=f"Raw note captured without durable memory promotion:\n\n> {statement}",
+        proposed_action={
+            "command_type": "none",
+            "risk_level": "safe_internal_read",
+            "payload": {
+                "source_capture_id": capture_id,
+                "summary": _compact_title(statement, fallback="Raw note"),
+            },
+        },
+        needs_review=False,
     )
 
 

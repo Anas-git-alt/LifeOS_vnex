@@ -8,6 +8,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 try:
     import yaml
@@ -29,21 +31,27 @@ REQUIRED_PATHS = [
     "configs/policies.yaml",
     "configs/discord.yaml",
     "configs/telegram.yaml",
+    "docs/implementation_gap_analysis.md",
+    "packages/protocols/agent_run_result.schema.json",
     "vault/README.md",
 ]
 
 REQUIRED_ENV_KEYS = [
     "LIFEOS_ENV",
     "LIFEOS_TIMEZONE",
+    "LIFEOS_API_BASE_URL",
+    "LIFEOS_ROUTER_MODE",
     "DATABASE_URL",
     "REDIS_URL",
     "DISCORD_BOT_TOKEN",
+    "DISCORD_APPLICATION_ID",
     "DISCORD_OWNER_USER_ID",
     "DISCORD_APPROVAL_CHANNEL_ID",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_OWNER_USER_ID",
     "OPENROUTER_API_KEY_1",
     "NVIDIA_NIM_API_KEY_1",
+    "VITE_LIFEOS_API_URL",
 ]
 
 
@@ -96,7 +104,20 @@ def check_yaml_configs() -> list[str]:
     for path in sorted((ROOT / "configs/agents").glob("*.yaml")):
         data = read_yaml(path)
         agents.append(data.get("id"))
-        for key in ["id", "display_name", "domain", "role", "autonomy_level"]:
+        for key in [
+            "id",
+            "display_name",
+            "domain",
+            "role",
+            "autonomy_level",
+            "system_prompt",
+            "allowed_tools",
+            "input_schema",
+            "output_schema",
+            "review_requirements",
+            "escalation_rules",
+            "max_iterations_default",
+        ]:
             if key not in data:
                 errors.append(f"{path.relative_to(ROOT)} missing {key}")
     if "work.generic" not in agents:
@@ -129,10 +150,62 @@ def check_vault_shape() -> list[str]:
 
 def check_live_env() -> list[str]:
     warnings = []
-    for key in ["DISCORD_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "OPENROUTER_API_KEY_1", "NVIDIA_NIM_API_KEY_1"]:
+    for key in [
+        "DATABASE_URL",
+        "REDIS_URL",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_OWNER_USER_ID",
+        "DISCORD_APPROVAL_CHANNEL_ID",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_OWNER_USER_ID",
+        "OPENROUTER_API_KEY_1",
+        "NVIDIA_NIM_API_KEY_1",
+    ]:
         if not os.getenv(key):
             warnings.append(f"{key} is not set in the current shell")
+    router_mode = os.getenv("LIFEOS_ROUTER_MODE", "hybrid")
+    if router_mode not in {"agentic", "deterministic", "hybrid"}:
+        warnings.append(f"LIFEOS_ROUTER_MODE should be agentic|deterministic|hybrid, got {router_mode}")
     return warnings
+
+
+def check_webui_config() -> list[str]:
+    warnings = []
+    if not (ROOT / "apps/web/package-lock.json").exists():
+        warnings.append("apps/web/package-lock.json missing; run npm --prefix apps/web install")
+    if "build" not in (ROOT / "apps/web/package.json").read_text(encoding="utf-8"):
+        warnings.append("apps/web package lacks build script")
+    return warnings
+
+
+def check_running_api() -> list[str]:
+    warnings = []
+    base_url = os.getenv("LIFEOS_API_BASE_URL", "http://localhost:8000").rstrip("/")
+    try:
+        with urlopen(f"{base_url}/api/readiness", timeout=3) as response:  # noqa: S310
+            payload = response.read().decode("utf-8")
+    except (OSError, URLError, TimeoutError) as exc:
+        warnings.append(f"API readiness not reachable at {base_url}: {exc}")
+        return warnings
+    if "router_mode" not in payload:
+        warnings.append("API readiness did not report router_mode")
+    return warnings
+
+
+def check_discord_command_readiness() -> list[str]:
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        return []
+    try:
+        request = Request(
+            "https://discord.com/api/v10/oauth2/applications/@me",
+            headers={"Authorization": f"Bot {token}"},
+            method="GET",
+        )
+        with urlopen(request, timeout=5):  # noqa: S310
+            return []
+    except (OSError, URLError, TimeoutError) as exc:
+        return [f"Discord command registration check failed: {exc}"]
 
 
 def main() -> int:
@@ -148,6 +221,9 @@ def main() -> int:
     errors.extend(check_yaml_configs())
     errors.extend(check_vault_shape())
     warnings.extend(check_live_env())
+    warnings.extend(check_webui_config())
+    warnings.extend(check_running_api())
+    warnings.extend(check_discord_command_readiness())
 
     if warnings:
         print("Warnings:")

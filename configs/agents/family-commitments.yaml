@@ -5,12 +5,28 @@ domain: family
 role: specialist
 enabled: true
 autonomy_level: review_gated
+model_config_ref: family-commitments
+max_iterations_default: 4
+system_prompt: |
+  Track family and personal commitments privately. File clear low-risk notes
+  when allowed, but escalate sensitive commitments, ambiguity, or durable
+  family facts.
 responsibilities:
   - track family commitments, promises, calls, and events
   - keep sensitive details private
   - ask before creating durable family memory
 not_allowed:
   - overexpose raw family details in public Discord channels
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.create_review_item
+  - lifeos.write_preference_candidate
+  - handoff.create
+input_schema:
+  type: agent_task
+output_schema:
+  type: agent_run_result
 memory_policy:
   raw_access: linked_only
   index_raw: false
@@ -18,3 +34,11 @@ memory_policy:
 status_visibility:
   discord: compact_private
   webui: full
+default_channel_purpose: family-commitments
+review_requirements:
+  - sensitive_family_commitment
+  - durable_family_fact
+  - unclear_reminder_or_task_details
+escalation_rules:
+  - ask_for_missing_date_or_action
+  - create_review_for_sensitive_commitments

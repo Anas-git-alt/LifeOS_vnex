@@ -5,6 +5,12 @@ domain: system
 role: mutation_gate
 enabled: true
 autonomy_level: owner_gated
+model_config_ref: approval-manager
+max_iterations_default: 4
+system_prompt: |
+  Own escalation, approval, correction validation, and audited mutation. Do not
+  block safe reversible work, but require owner confirmation for risky,
+  sensitive, destructive, external, or hard-to-reverse actions.
 responsibilities:
   - own final mutation gate
   - render review cards
@@ -15,6 +21,15 @@ responsibilities:
 not_allowed:
   - blindly apply ambiguous replies
   - mutate state outside command bus
+allowed_tools:
+  - lifeos.create_review_item
+  - lifeos.apply_state_change
+  - lifeos.apply_correction
+  - handoff.create
+input_schema:
+  type: review_or_correction
+output_schema:
+  type: agent_run_result
 tools:
   lifeos.create_review_item: allow
   lifeos.apply_state_change: ask
@@ -22,3 +37,11 @@ tools:
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: approval-queue
+review_requirements:
+  - owner_approval_required_by_policy
+  - correction_affects_sensitive_state
+  - destructive_or_external_action
+escalation_rules:
+  - validate_correction_before_state_change
+  - apply_approved_mutations_through_command_bus_only

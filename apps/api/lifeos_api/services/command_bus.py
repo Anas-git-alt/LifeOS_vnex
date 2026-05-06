@@ -1,7 +1,6 @@
 """Audited command bus for state mutations."""
 
 from datetime import datetime
-from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,6 +20,7 @@ from lifeos_api.db.models import (
 from lifeos_api.services.audit import create_audit_event
 from lifeos_api.services.status_events import create_status_event
 from lifeos_api.services.vault import VaultWriter
+from lifeos_core.compat import StrEnum
 from lifeos_core.ids import new_id
 from lifeos_core.time import local_now, utc_now
 
@@ -185,6 +185,36 @@ class CommandBus:
                 updated_at=now,
             )
             self.session.add(item)
+            self.vault.write_state_snapshot(name="tasks", body_md=f"# Tasks\n\n- [{item.status}] {item.title}\n")
+            return "life_item", item.id
+
+        if command.command_type == "life_item.update":
+            item_id = str(payload["item_id"])
+            item = await self.session.get(LifeItem, item_id)
+            if item is None:
+                raise ValueError(f"Life item not found: {item_id}")
+            updates = dict(payload.get("updates", {}))
+            allowed = {
+                "domain",
+                "item_type",
+                "title",
+                "description_md",
+                "status",
+                "priority",
+                "due_at",
+                "scheduled_at",
+                "metadata_json",
+            }
+            for key, value in updates.items():
+                if key not in allowed:
+                    raise ValueError(f"Unsupported life_item.update field: {key}")
+                if key in {"due_at", "scheduled_at"}:
+                    setattr(item, key, _parse_dt(value))
+                elif key == "metadata_json":
+                    item.metadata_json = dict(value or {})
+                else:
+                    setattr(item, key, value)
+            item.updated_at = now
             self.vault.write_state_snapshot(name="tasks", body_md=f"# Tasks\n\n- [{item.status}] {item.title}\n")
             return "life_item", item.id
 

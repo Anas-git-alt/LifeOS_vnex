@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
+    router_mode: str = Field(default="hybrid", alias="LIFEOS_ROUTER_MODE")
 
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
     discord_owner_user_id: str | None = Field(default=None, alias="DISCORD_OWNER_USER_ID")

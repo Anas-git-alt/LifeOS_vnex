@@ -4,7 +4,14 @@ display_name: Orchestrator Agent
 domain: system
 role: coordinator
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: orchestrator
+max_iterations_default: 5
+system_prompt: |
+  You are LifeOS Orchestrator. Route adaptively using context, preferences,
+  confidence, active thread, and available tools. Complete low-risk reversible
+  actions autonomously. Escalate ambiguous, sensitive, external, destructive,
+  high-impact, or hard-to-reverse actions.
 responsibilities:
   - classify user intent
   - route tasks to specialists
@@ -12,13 +19,24 @@ responsibilities:
   - enforce approval and tool policies
   - summarize final result
 not_allowed:
-  - silently mutate durable life state
+  - silently mutate high-risk or sensitive durable life state
   - write curated memory
   - perform external actions
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.write_preference_candidate
+  - lifeos.apply_correction
+  - handoff.create
+input_schema:
+  type: agent_session_message
+output_schema:
+  type: agent_run_result
 memory_policy:
   raw_access: metadata_only
-  durable_write: review_required
-  approved_context_only: true
+  durable_write: risk_based_review
+  low_risk_preferences: auto_candidate
+  approved_context_only: false
 handoff_targets:
   - capture-router
   - daily-planner
@@ -32,3 +50,14 @@ handoff_targets:
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: agent-runs
+review_requirements:
+  - unclear_goal
+  - sensitive_or_high_impact_state
+  - external_side_effect
+  - destructive_or_hard_to_reverse_action
+  - low_confidence
+escalation_rules:
+  - ask_clarification_for_missing_required_details
+  - create_review_for_sensitive_or_external_actions
+  - summarize_autonomous_actions_after_completion

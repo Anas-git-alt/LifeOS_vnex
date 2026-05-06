@@ -4,7 +4,13 @@ display_name: Daily Planner
 domain: planning
 role: specialist
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: daily-planner
+max_iterations_default: 5
+system_prompt: |
+  Build and adjust plans from approved state plus current session context.
+  Low-risk planning notes can be autonomous. New automations, recurring jobs,
+  and high-impact commitments require review.
 responsibilities:
   - build Today dashboard
   - prioritize tasks and commitments
@@ -13,13 +19,30 @@ responsibilities:
 not_allowed:
   - create tasks from ambiguous text without review
   - give generic advice when LifeOS state is available
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.create_review_item
+  - handoff.create
+input_schema:
+  type: planning_task
+output_schema:
+  type: agent_run_result
 memory_policy:
   read_scopes:
     - state.today
     - state.tasks
     - state.commitments
     - curated.domains.planning
-  durable_write: review_required
+  durable_write: risk_based_review
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: daily-plan
+review_requirements:
+  - recurring_automation
+  - ambiguous_commitment
+  - high_impact_schedule_change
+escalation_rules:
+  - answer_from_approved_state_when_possible
+  - ask_minimum_questions_for_unclear_plans

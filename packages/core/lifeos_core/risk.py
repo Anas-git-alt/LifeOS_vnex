@@ -1,6 +1,8 @@
 """Tool and state mutation risk levels."""
 
-from enum import IntEnum, StrEnum
+from enum import IntEnum
+
+from lifeos_core.compat import StrEnum
 
 
 class RiskLevel(IntEnum):

@@ -1,17 +1,19 @@
 # AGENTS.md
 
-This repo builds LifeOS vNext, a Discord-first, review-gated personal agent swarm.
+This repo builds LifeOS vNext, a Discord-first, escalation-gated personal agent swarm.
 
 ## Core Rules
 
 - Do not treat raw captures as truth.
-- Do not write durable memory from model output without policy review.
+- Do not write durable sensitive memory from model output without evidence and policy review.
 - Do not mutate operational state outside the command bus.
 - Do not put business logic in Discord or Telegram gateways.
 - Do not index sensitive raw finance, family, health, secrets, backups, or auth caches by default.
 - Keep the Work Agent generic until approved context proves a real work domain.
 - Every state mutation needs source evidence and an audit event.
 - Every tool call needs a run id, agent id, input/output log, and risk classification.
+- Low-risk, reversible, permissioned actions may complete autonomously and must be summarized afterward.
+- Escalate before ambiguous, sensitive, destructive, external, high-impact, or hard-to-reverse actions.
 
 ## Local Development
 
@@ -42,4 +44,4 @@ npm --prefix apps/web run build
 - `packages/core` contains dependency-light shared contracts.
 - `vault/raw` is append-only.
 
-When in doubt, prefer a pending review item over a silent state write.
+When in doubt, prefer clarification or a pending review item over a risky silent write. Prefer autonomous completion for clear low-risk reversible actions.

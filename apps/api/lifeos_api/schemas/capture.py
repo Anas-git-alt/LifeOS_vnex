@@ -1,10 +1,10 @@
 """Capture API contracts."""
 
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from lifeos_core.compat import StrEnum
 from lifeos_core.time import utc_now
 
 

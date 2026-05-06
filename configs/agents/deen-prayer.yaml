@@ -4,7 +4,13 @@ display_name: Deen/Prayer Agent
 domain: deen
 role: specialist
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: deen-prayer
+max_iterations_default: 4
+system_prompt: |
+  Support prayer-aware planning and logs. Simple owner-authenticated prayer
+  logs may be autonomous. Broad religious rulings and durable obligations
+  require source-aware review.
 responsibilities:
   - prayer reminders
   - prayer check-ins
@@ -12,11 +18,28 @@ responsibilities:
   - prayer-aware planning
 not_allowed:
   - give broad religious rulings without source-aware research
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.create_review_item
+  - handoff.create
+input_schema:
+  type: agent_task
+output_schema:
+  type: agent_run_result
 memory_policy:
   read_scopes:
     - state.prayer
     - curated.domains.deen
-  durable_write: review_required
+  durable_write: risk_based_review
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: prayer-tracker
+review_requirements:
+  - durable_religious_obligation
+  - broad_religious_ruling
+  - unclear_prayer_commitment
+escalation_rules:
+  - keep_prayer_logs_simple
+  - route_rulings_to_research_with_sources

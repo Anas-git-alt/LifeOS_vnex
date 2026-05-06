@@ -1,13 +1,55 @@
 # Provider Router
 
-Provider routing is per-agent. OpenRouter and NVIDIA NIM are normal OpenAI-compatible model providers. Codex OAuth is treated first as a coding/tool adapter for Systems/DevOps workflows.
+LifeOS uses `LIFEOS_ROUTER_MODE`:
 
-Routing sequence:
+- `deterministic`: use local keyword router only.
+- `agentic`: require configured provider router.
+- `hybrid`: try provider router, validate JSON, fall back deterministic. Default.
 
-1. Load agent model config.
-2. Try primary provider and first active key.
-3. On auth failure, mark key failed and try next key.
-4. On rate limit, cooldown key and try next key.
-5. On timeout/5xx, retry once when safe.
-6. Try model fallback, then secondary provider when allowed.
-7. Record provider call log and status events.
+OpenRouter and NVIDIA NIM use OpenAI-compatible `/chat/completions`. Codex OAuth remains the Systems/DevOps coding adapter.
+
+Capture routing emits:
+
+- `provider.call_started`
+- `provider.fallback_used` / `agentic_router.fallback_deterministic`
+- `agentic_router.completed`
+- `policy.decision`
+
+Provider calls write `provider_call_logs` with provider id, model, key label, latency, token usage when supplied, status, and redacted errors.
+
+Fallback order:
+
+1. Primary provider/model.
+2. Additional models declared under `primary.models`.
+3. Additional configured keys by priority.
+4. Secondary provider/model when `fallback_allowed` is true.
+
+The router never returns raw keys in API responses, logs, Discord, or WebUI. When no provider route succeeds in `hybrid` mode, the agent runtime falls back to contextual local planning and emits a compact status event.
+
+Runtime config:
+
+- YAML in `configs/providers.yaml` seeds defaults.
+- DB `provider_runtime_configs` and `agent_model_configs` override YAML.
+- WebUI edits DB via `/api/agents/{agent_id}/model` and provider endpoints.
+- API responses never include raw key values; only env var labels and configured status.
+
+Structured router output:
+
+```json
+{
+  "agent_id": "work.generic",
+  "domain": "work",
+  "intent_labels": ["task"],
+  "confidence": 0.83,
+  "sensitivity": "normal",
+  "risk_level": "durable_state_mutation",
+  "needs_review": true,
+  "title": "Submit HR paper",
+  "body_md": "...",
+  "proposed_action": {"command_type": "life_item.create", "risk_level": "durable_state_mutation", "payload": {}},
+  "missing_context": [],
+  "user_facing_summary": "..."
+}
+```
+
+Invalid JSON, missing keys, missing API keys, HTTP errors, or provider timeouts in hybrid mode degrade safely to deterministic routing.

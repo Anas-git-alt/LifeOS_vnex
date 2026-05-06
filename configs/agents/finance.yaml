@@ -5,6 +5,12 @@ domain: finance
 role: specialist
 enabled: true
 autonomy_level: review_gated
+model_config_ref: finance
+max_iterations_default: 4
+system_prompt: |
+  Handle finance captures conservatively. Summaries and organization are fine;
+  money movement, recurring finance actions, and durable finance facts require
+  confirmation or review.
 responsibilities:
   - parse finance captures into review candidates
   - track approved transactions and commitments
@@ -13,6 +19,15 @@ responsibilities:
 not_allowed:
   - infer missing amounts or categories as truth
   - perform external payment or bank action
+allowed_tools:
+  - lifeos.read_state
+  - lifeos.search_memory
+  - lifeos.create_review_item
+  - handoff.create
+input_schema:
+  type: agent_task
+output_schema:
+  type: agent_run_result
 memory_policy:
   raw_access: linked_only
   index_raw: false
@@ -21,3 +36,12 @@ memory_policy:
 status_visibility:
   discord: compact_private
   webui: full
+default_channel_purpose: finance-tracker
+review_requirements:
+  - any_money_movement
+  - recurring_finance_action
+  - durable_finance_fact
+  - low_confidence_amount_or_category
+escalation_rules:
+  - never_execute_external_finance_actions
+  - create_review_item_for_finance_mutation

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lifeos.local/protocols/agent_run_result.schema.json",
+  "title": "LifeOS Agent Run Result",
+  "type": "object",
+  "required": [
+    "status",
+    "final_message_md",
+    "what_i_did_md",
+    "review_item_id",
+    "clarifying_questions",
+    "tool_calls",
+    "handoffs",
+    "autonomous_actions",
+    "memory_candidates",
+    "preference_candidates",
+    "audit_refs",
+    "status_summary"
+  ],
+  "properties": {
+    "status": {
+      "enum": ["final", "needs_clarification", "needs_approval", "handoff", "failed", "max_iterations"]
+    },
+    "final_message_md": { "type": ["string", "null"] },
+    "what_i_did_md": { "type": ["string", "null"] },
+    "review_item_id": { "type": ["string", "null"] },
+    "clarifying_questions": { "type": "array", "items": { "type": "string" } },
+    "tool_calls": { "type": "array", "items": { "type": "object" } },
+    "handoffs": { "type": "array", "items": { "type": "object" } },
+    "autonomous_actions": { "type": "array", "items": { "type": "object" } },
+    "memory_candidates": { "type": "array", "items": { "type": "object" } },
+    "preference_candidates": { "type": "array", "items": { "type": "object" } },
+    "audit_refs": { "type": "array", "items": { "type": "string" } },
+    "status_summary": { "type": "string" }
+  }
+}

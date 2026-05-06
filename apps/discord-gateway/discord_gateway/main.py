@@ -1,9 +1,4 @@
-"""Thin Discord review-card gateway.
-
-This dependency-light adapter posts pending review cards to one configured
-Discord channel. Interaction callbacks/buttons are the next adapter layer; the
-API review decision endpoint is already implemented.
-"""
+"""Thin Discord command/review gateway."""
 
 from __future__ import annotations
 
@@ -13,44 +8,28 @@ import os
 import platform
 import threading
 import time
+from typing import Any
 from urllib.error import URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-import websockets
-from websockets.exceptions import ConnectionClosed
+from discord_gateway.api_client import LifeOSApiClient
+
+DISCORD_API = "https://discord.com/api/v10"
+DECISIONS = {"approve", "reject", "correct", "clarify", "snooze", "done"}
 
 
 def validate_config() -> list[str]:
-    missing = []
-    for key in [
-        "DISCORD_BOT_TOKEN",
-        "DISCORD_OWNER_USER_ID",
-        "DISCORD_APPROVAL_CHANNEL_ID",
-        "LIFEOS_API_BASE_URL",
-    ]:
-        if not os.getenv(key):
-            missing.append(key)
-    return missing
-
-
-def get_json(url: str) -> dict[str, object]:
-    with urlopen(url, timeout=20) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
-
-
-def post_discord_message(token: str, channel_id: str, content: str) -> None:
-    request = Request(
-        f"https://discord.com/api/v10/channels/{channel_id}/messages",
-        data=json.dumps({"content": content[:1900]}).encode("utf-8"),
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "LifeOS-vNext (https://lifeos.local, 0.1)",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=20):  # noqa: S310
-        return
+    return [
+        key
+        for key in [
+            "DISCORD_BOT_TOKEN",
+            "DISCORD_OWNER_USER_ID",
+            "DISCORD_APPROVAL_CHANNEL_ID",
+            "LIFEOS_API_BASE_URL",
+        ]
+        if not os.getenv(key)
+    ]
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -60,44 +39,217 @@ def env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def format_review_card(item: dict[str, object]) -> str:
-    return "\n".join(
+def discord_request(token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        f"{DISCORD_API}{path}",
+        data=data,
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "LifeOS-vNext (https://lifeos.local, 0.1)",
+        },
+        method=method,
+    )
+    with urlopen(request, timeout=25) as response:  # noqa: S310
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else {}
+
+
+def post_discord_message(token: str, channel_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return discord_request(token, "POST", f"/channels/{channel_id}/messages", payload)
+
+
+def add_reaction(token: str, channel_id: str, message_id: str, emoji: str) -> None:
+    encoded = quote(emoji)
+    discord_request(token, "PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me")
+
+
+def create_discord_thread(token: str, channel_id: str, title: str) -> dict[str, Any]:
+    return discord_request(
+        token,
+        "POST",
+        f"/channels/{channel_id}/threads",
+        {"name": title[:100] or "LifeOS session", "type": 11, "auto_archive_duration": 1440},
+    )
+
+
+def respond_interaction(
+    token: str,
+    interaction_id: str,
+    interaction_token: str,
+    payload: dict[str, Any],
+) -> None:
+    request = Request(
+        f"{DISCORD_API}/interactions/{interaction_id}/{interaction_token}/callback",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=10):  # noqa: S310
+        return
+
+
+def edit_interaction_response(
+    application_id: str,
+    interaction_token: str,
+    payload: dict[str, Any],
+) -> None:
+    request = Request(
+        f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}/messages/@original",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urlopen(request, timeout=15):  # noqa: S310
+        return
+
+
+def register_commands(token: str, dry_run: bool = False) -> dict[str, Any]:
+    app_id = os.getenv("DISCORD_APPLICATION_ID")
+    if not app_id:
+        app = discord_request(token, "GET", "/oauth2/applications/@me")
+        app_id = str(app.get("id") or "")
+    if not app_id:
+        return {"ok": False, "status": "missing_application_id"}
+
+    guild_id = os.getenv("DISCORD_GUILD_ID")
+    path = (
+        f"/applications/{app_id}/guilds/{guild_id}/commands"
+        if guild_id
+        else f"/applications/{app_id}/commands"
+    )
+    commands = [lifeos_command_payload()]
+    if dry_run:
+        return {"ok": True, "status": "dry_run", "path": path, "commands": commands}
+    result = discord_request(token, "PUT", path, commands)
+    return {"ok": True, "status": "registered", "path": path, "count": len(result) if isinstance(result, list) else 1}
+
+
+def lifeos_command_payload() -> dict[str, Any]:
+    text_option = {"type": 3, "name": "text", "description": "Text", "required": True}
+    message_option = {"type": 3, "name": "message", "description": "Message", "required": True}
+    agent_option = {"type": 3, "name": "agent", "description": "Agent id", "required": True}
+    optional_agent_option = {"type": 3, "name": "agent", "description": "Agent id", "required": False}
+    title_option = {"type": 3, "name": "title", "description": "Session title", "required": False}
+    iteration_option = {"type": 4, "name": "iteration_cap", "description": "Max agent iterations", "required": False}
+    visibility_option = {
+        "type": 3,
+        "name": "visibility",
+        "description": "Session visibility",
+        "required": False,
+        "choices": [{"name": item, "value": item} for item in ["private", "discord_compact", "web_full"]],
+    }
+    provider_option = {"type": 3, "name": "provider", "description": "Provider id", "required": True}
+    model_option = {"type": 3, "name": "model", "description": "Model name", "required": True}
+    mode_option = {
+        "type": 3,
+        "name": "mode",
+        "description": "Autonomy mode",
+        "required": True,
+        "choices": [{"name": item, "value": item} for item in ["safe", "balanced", "review_gated", "manual"]],
+    }
+    return {
+        "name": "lifeos",
+        "description": "LifeOS control surface",
+        "options": [
+            {"type": 1, "name": "help", "description": "Show commands"},
+            {
+                "type": 1,
+                "name": "new",
+                "description": "Start a new agent session",
+                "options": [optional_agent_option, title_option, iteration_option, visibility_option],
+            },
+            {
+                "type": 1,
+                "name": "thread",
+                "description": "Create or bind a Discord thread to an agent session",
+                "options": [optional_agent_option, title_option, iteration_option],
+            },
+            {"type": 1, "name": "agent", "description": "Show or switch session agent", "options": [optional_agent_option]},
+            {"type": 1, "name": "iterations", "description": "Show or set iteration cap", "options": [iteration_option]},
+            {"type": 1, "name": "cancel", "description": "Cancel active session run"},
+            {"type": 1, "name": "status", "description": "Show health/provider status"},
+            {"type": 1, "name": "capture", "description": "Capture text", "options": [text_option]},
+            {"type": 1, "name": "today", "description": "Show today state"},
+            {"type": 1, "name": "reviews", "description": "Show pending reviews"},
+            {"type": 1, "name": "ask", "description": "Ask LifeOS", "options": [message_option]},
+            {"type": 1, "name": "agents", "description": "Show agents"},
+            {"type": 1, "name": "providers", "description": "Show providers/models"},
+            {
+                "type": 1,
+                "name": "model",
+                "description": "Set agent model",
+                "options": [agent_option, provider_option, model_option],
+            },
+            {
+                "type": 1,
+                "name": "autonomy",
+                "description": "Set agent autonomy",
+                "options": [agent_option, mode_option],
+            },
+            {"type": 1, "name": "sync", "description": "Sync YAML bootstrap defaults into DB"},
+        ],
+    }
+
+
+def format_review_card(item: dict[str, object]) -> dict[str, Any]:
+    content = "\n".join(
         [
-            f"Review needed: {item.get('title')}",
+            f"**Review needed:** {item.get('title')}",
             "",
-            str(item.get("body_md") or ""),
+            str(item.get("body_md") or "")[:1200],
             "",
-            f"review_id: {item.get('id')}",
-            f"agent: {item.get('proposed_by_agent_id')}",
-            f"risk: {item.get('risk_level')}",
-            "",
-            "Decide in WebUI or POST /api/reviews/{review_id}/decision.",
+            f"`review_id`: {item.get('id')}",
+            f"`agent`: {item.get('proposed_by_agent_id')}",
+            f"`risk`: {item.get('risk_level')}",
+            f"`status`: {item.get('status')}",
         ]
     )
+    return {"content": content[:1900], "components": review_components(str(item.get("id")))}
 
 
-def review_poller(token: str, channel_id: str, api_base: str, dry_run: bool, post_existing: bool) -> None:
+def review_components(review_id: str) -> list[dict[str, Any]]:
+    def button(label: str, emoji: str, decision: str, style: int) -> dict[str, Any]:
+        return {
+            "type": 2,
+            "style": style,
+            "label": label,
+            "emoji": {"name": emoji},
+            "custom_id": f"lifeos:review:{decision}:{review_id}",
+        }
+
+    return [
+        {
+            "type": 1,
+            "components": [
+                button("Approve", "✅", "approve", 3),
+                button("Reject", "❌", "reject", 4),
+                button("Correct", "✏️", "correct", 2),
+                button("Clarify", "❓", "clarify", 2),
+                button("Snooze", "💤", "snooze", 2),
+            ],
+        },
+        {"type": 1, "components": [button("Done", "✅", "done", 3)]},
+    ]
+
+
+def review_poller(token: str, channel_id: str, client: LifeOSApiClient, dry_run: bool, post_existing: bool) -> None:
     posted: set[str] = set()
-    print(
-        f"discord-gateway review posting enabled api_base={api_base} dry_run={dry_run}",
-        flush=True,
-    )
-
     if not post_existing:
         try:
-            payload = get_json(f"{api_base}/api/reviews?status=pending&limit=100")
+            payload = client.get("/api/reviews?status=pending&limit=100")
             posted = {
                 str(item.get("id"))
                 for item in payload.get("items", [])
                 if isinstance(item, dict) and item.get("id")
             }
-            print(f"discord-gateway skipped existing pending reviews count={len(posted)}", flush=True)
         except (OSError, URLError, TimeoutError, KeyError, ValueError) as exc:
             print(f"discord-gateway startup sync error: {exc}", flush=True)
 
     while True:
         try:
-            payload = get_json(f"{api_base}/api/reviews?status=pending&limit=20")
+            payload = client.get("/api/reviews?status=pending&limit=20")
             for item in payload.get("items", []):
                 if not isinstance(item, dict):
                     continue
@@ -109,20 +261,28 @@ def review_poller(token: str, channel_id: str, api_base: str, dry_run: bool, pos
                 else:
                     post_discord_message(token, channel_id, format_review_card(item))
                 posted.add(review_id)
-            time.sleep(15)
+            time.sleep(10)
         except (OSError, URLError, TimeoutError, KeyError, ValueError) as exc:
-            print(f"discord-gateway error: {exc}", flush=True)
-            time.sleep(15)
+            print(f"discord-gateway poll error: {exc}", flush=True)
+            time.sleep(10)
 
 
-async def heartbeat_loop(websocket: websockets.ClientConnection, interval_seconds: float, seq: dict[str, int | None]) -> None:
+async def heartbeat_loop(websocket: Any, interval_seconds: float, seq: dict[str, int | None]) -> None:
     while True:
         await asyncio.sleep(interval_seconds)
         await websocket.send(json.dumps({"op": 1, "d": seq["value"]}))
 
 
-async def run_discord_gateway(token: str) -> None:
+async def run_discord_gateway(token: str, client: LifeOSApiClient) -> None:
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
     gateway_url = "wss://gateway.discord.gg/?v=10&encoding=json"
+    owner_id = os.environ["DISCORD_OWNER_USER_ID"]
+    message_intents = env_flag("DISCORD_ENABLE_LEGACY_COMMANDS", True)
+    intents = 0
+    if message_intents:
+        intents = 512 | 4096 | 32768
 
     while True:
         seq: dict[str, int | None] = {"value": None}
@@ -139,54 +299,551 @@ async def run_discord_gateway(token: str) -> None:
                         seq["value"] = int(sequence)
 
                     if op == 10 and isinstance(data, dict):
-                        heartbeat_interval = float(data["heartbeat_interval"]) / 1000
-                        if heartbeat_task is not None:
-                            heartbeat_task.cancel()
-                        heartbeat_task = asyncio.create_task(
-                            heartbeat_loop(websocket, heartbeat_interval, seq)
-                        )
-                        identify = {
-                            "op": 2,
-                            "d": {
-                                "token": token,
-                                "intents": 0,
-                                "properties": {
-                                    "os": platform.system().lower(),
-                                    "browser": "lifeos-vnext",
-                                    "device": "lifeos-vnext",
-                                },
-                                "presence": {
-                                    "since": None,
-                                    "activities": [{"name": "LifeOS review queue", "type": 3}],
-                                    "status": "online",
-                                    "afk": False,
-                                },
-                            },
-                        }
-                        await websocket.send(json.dumps(identify))
+                        heartbeat_task = await _identify(websocket, token, data, seq, heartbeat_task, intents)
                         continue
 
-                    if op == 0 and payload.get("t") == "READY" and isinstance(data, dict):
-                        print(
-                            f"discord-gateway websocket ready session_id={data.get('session_id')}",
-                            flush=True,
-                        )
+                    if op == 0 and isinstance(data, dict):
+                        event = str(payload.get("t"))
+                        if event == "READY":
+                            print(f"discord-gateway ready session_id={data.get('session_id')}", flush=True)
+                        elif event == "INTERACTION_CREATE":
+                            handle_interaction(token, client, data, owner_id)
+                        elif event == "MESSAGE_CREATE":
+                            handle_message(token, client, data, owner_id)
                         continue
 
-                    if op == 7:
-                        print("discord-gateway websocket reconnect requested", flush=True)
+                    if op in {7, 9}:
+                        print(f"discord-gateway reconnect op={op}", flush=True)
                         break
-
-                    if op == 9:
-                        print("discord-gateway websocket invalid session", flush=True)
-                        break
-
         except (OSError, TimeoutError, ConnectionClosed, json.JSONDecodeError) as exc:
             print(f"discord-gateway websocket error: {exc}", flush=True)
         finally:
             if heartbeat_task is not None:
                 heartbeat_task.cancel()
         await asyncio.sleep(5)
+
+
+async def _identify(
+    websocket: Any,
+    token: str,
+    hello: dict[str, Any],
+    seq: dict[str, int | None],
+    heartbeat_task: asyncio.Task[None] | None,
+    intents: int,
+) -> asyncio.Task[None]:
+    if heartbeat_task is not None:
+        heartbeat_task.cancel()
+    task = asyncio.create_task(heartbeat_loop(websocket, float(hello["heartbeat_interval"]) / 1000, seq))
+    await websocket.send(
+        json.dumps(
+            {
+                "op": 2,
+                "d": {
+                    "token": token,
+                    "intents": intents,
+                    "properties": {
+                        "os": platform.system().lower(),
+                        "browser": "lifeos-vnext",
+                        "device": "lifeos-vnext",
+                    },
+                    "presence": {
+                        "since": None,
+                        "activities": [{"name": "LifeOS commands", "type": 3}],
+                        "status": "online",
+                        "afk": False,
+                    },
+                },
+            }
+        )
+    )
+    return task
+
+
+def handle_interaction(token: str, client: LifeOSApiClient, data: dict[str, Any], owner_id: str) -> None:
+    interaction_id = str(data["id"])
+    interaction_token = str(data["token"])
+    if not _is_owner(data, owner_id):
+        respond_interaction(token, interaction_id, interaction_token, ephemeral("Not authorized."))
+        return
+    kind = int(data.get("type", 0))
+    try:
+        if kind == 2:
+            respond_interaction(token, interaction_id, interaction_token, {"type": 5})
+            try:
+                text = handle_slash(token, client, data)
+            except Exception as exc:  # noqa: BLE001 - post concise deferred failure
+                text = f"LifeOS failed: {exc}"
+            try:
+                edit_interaction_response(
+                    str(data.get("application_id") or os.getenv("DISCORD_APPLICATION_ID") or ""),
+                    interaction_token,
+                    {"content": text[:1900]},
+                )
+            except Exception as exc:  # noqa: BLE001 - deferred interactions cannot be acknowledged twice
+                channel_id = data.get("channel_id")
+                if channel_id:
+                    post_discord_message(token, str(channel_id), {"content": f"{text[:1800]}\n\n(delivery fallback: {exc})"})
+        elif kind == 3:
+            payload = handle_component(data)
+            if payload["type"] == "modal":
+                respond_interaction(token, interaction_id, interaction_token, payload["payload"])
+            else:
+                result = client.post(
+                    f"/api/reviews/{quote(str(payload['review_id']))}/decision",
+                    payload["payload"],
+                )
+                respond_interaction(
+                    token,
+                    interaction_id,
+                    interaction_token,
+                    message(f"Review {payload['decision']}: {result.get('status')}"),
+                )
+        elif kind == 5:
+            result = handle_modal(client, data)
+            respond_interaction(token, interaction_id, interaction_token, message(result))
+    except Exception as exc:  # noqa: BLE001 - gateway must return short user-visible failure
+        respond_interaction(token, interaction_id, interaction_token, ephemeral(f"LifeOS failed: {exc}"))
+
+
+def handle_slash(token: str, client: LifeOSApiClient, data: dict[str, Any]) -> str:
+    command = parse_lifeos_command(data.get("data", {}))
+    name = command["name"]
+    options = command["options"]
+    if name == "help":
+        return help_text()
+    if name == "new":
+        response = client.post(
+            "/api/sessions",
+            {
+                "source_platform": "discord",
+                "external_channel_id": str(data.get("channel_id")),
+                "external_thread_id": _thread_id(data),
+                "external_message_id": str(data.get("id")),
+                "agent_id": options.get("agent") or "orchestrator",
+                "title": options.get("title") or "LifeOS session",
+                "iteration_cap": options.get("iteration_cap"),
+                "visibility": options.get("visibility") or "private",
+                "user_id": _user_id(data),
+                "metadata": {"created_from": "discord_slash_new"},
+            },
+        )
+        session = response.get("session", {}) if isinstance(response, dict) else {}
+        return format_session_created(session, thread_id=_thread_id(data))
+    if name == "thread":
+        title = str(options.get("title") or "LifeOS session")
+        channel_id = str(data.get("channel_id"))
+        thread_id = _thread_id(data)
+        created_thread = None
+        if thread_id is None:
+            try:
+                created_thread = create_discord_thread(token, channel_id, title)
+                thread_id = str(created_thread.get("id"))
+            except Exception:  # noqa: BLE001 - fallback to channel binding
+                thread_id = channel_id
+        response = client.post(
+            "/api/sessions",
+            {
+                "source_platform": "discord",
+                "external_channel_id": channel_id,
+                "external_thread_id": thread_id,
+                "external_message_id": str(data.get("id")),
+                "agent_id": options.get("agent") or "orchestrator",
+                "title": title,
+                "iteration_cap": options.get("iteration_cap"),
+                "visibility": "discord_compact",
+                "user_id": _user_id(data),
+                "metadata": {"created_from": "discord_slash_thread"},
+            },
+        )
+        session = response.get("session", {}) if isinstance(response, dict) else {}
+        return format_session_created(session, thread_id=thread_id, created_thread=bool(created_thread))
+    if name == "agent":
+        resolved = resolve_discord_session(client, data, create=True)
+        session = resolved.get("session", {}) if isinstance(resolved, dict) else {}
+        if options.get("agent"):
+            response = client.patch(f"/api/sessions/{quote(str(session.get('id')))}/agent", {"agent_id": options["agent"]})
+            session = response.get("session", {}) if isinstance(response, dict) else session
+        return f"Agent: `{session.get('agent_id', 'orchestrator')}`\nSession: `{session.get('id')}`"
+    if name == "iterations":
+        resolved = resolve_discord_session(client, data, create=True)
+        session = resolved.get("session", {}) if isinstance(resolved, dict) else {}
+        if options.get("iteration_cap"):
+            response = client.patch(
+                f"/api/sessions/{quote(str(session.get('id')))}/iterations",
+                {"iteration_cap": int(options["iteration_cap"])},
+            )
+            session = response.get("session", {}) if isinstance(response, dict) else session
+        return f"Iteration cap: `{session.get('iteration_cap', 5)}`\nSession: `{session.get('id')}`"
+    if name == "cancel":
+        resolved = resolve_discord_session(client, data, create=False)
+        session = resolved.get("session", {}) if isinstance(resolved, dict) else {}
+        if not session.get("id"):
+            return "No active session here."
+        response = client.post(f"/api/sessions/{quote(str(session.get('id')))}/cancel")
+        return f"Cancel: {response.get('status')}"
+    if name == "status":
+        return status_text(client)
+    if name == "capture":
+        response = client.post(
+            "/api/captures",
+            {
+                "source_platform": "discord",
+                "source_channel_id": str(data.get("channel_id")),
+                "external_message_id": str(data.get("id")),
+                "capture_kind": "text",
+                "raw_text": options["text"],
+                "metadata": {"owner_authenticated": True},
+            },
+        )
+        return str(response.get("message") or f"Captured: {response.get('capture', {}).get('id')}")
+    if name == "today":
+        return today_text(client)
+    if name == "reviews":
+        return reviews_text(client)
+    if name == "ask":
+        response = client.post(
+            "/api/ask",
+            {"source_platform": "discord", "source_external_message_id": str(data.get("id")), "message": options["message"]},
+        )
+        return str(response.get("answer") or response)
+    if name == "agents":
+        return agents_text(client)
+    if name == "providers":
+        return providers_text(client)
+    if name == "model":
+        response = client.patch(
+            f"/api/agents/{quote(options['agent'])}/model",
+            {"primary_provider_id": options["provider"], "primary_model": options["model"]},
+        )
+        return f"Model updated: {options['agent']} -> {options['provider']} / {options['model']} ({response.get('ok')})"
+    if name == "autonomy":
+        response = client.patch(f"/api/agents/{quote(options['agent'])}", {"autonomy_level": options["mode"]})
+        return f"Autonomy updated: {options['agent']} -> {options['mode']} ({response.get('ok')})"
+    if name == "sync":
+        agents = client.post("/api/agents/sync")
+        tools = client.post("/api/tools/sync")
+        return f"Synced agents={agents.get('count')} tools={tools.get('count')}"
+    return help_text()
+
+
+def parse_lifeos_command(data: dict[str, Any]) -> dict[str, Any]:
+    options = data.get("options") or []
+    if not options:
+        return {"name": "help", "options": {}}
+    sub = options[0]
+    values = {
+        item["name"]: item.get("value")
+        for item in sub.get("options", [])
+        if isinstance(item, dict) and "name" in item
+    }
+    return {"name": str(sub.get("name", "help")), "options": values}
+
+
+def handle_component(data: dict[str, Any]) -> dict[str, Any]:
+    custom_id = str(data.get("data", {}).get("custom_id", ""))
+    _, area, decision, review_id = custom_id.split(":", 3)
+    if area != "review" or decision not in DECISIONS:
+        raise ValueError("Unknown review action")
+    if decision in {"correct", "clarify"}:
+        return {"type": "modal", "payload": modal_payload(decision, review_id)}
+    return {
+        "type": "decision",
+        "review_id": review_id,
+        "decision": decision,
+        "payload": {
+            "decision": decision,
+            "decision_payload": {"hours": 8} if decision == "snooze" else {},
+            "source_platform": "discord",
+            "source_external_message_id": str(data.get("message", {}).get("id") or data.get("id")),
+        },
+    }
+
+
+def handle_modal(client: LifeOSApiClient, data: dict[str, Any]) -> str:
+    custom_id = str(data.get("data", {}).get("custom_id", ""))
+    _, area, decision, review_id = custom_id.split(":", 3)
+    if area != "modal" or decision not in {"correct", "clarify"}:
+        raise ValueError("Unknown modal")
+    text = modal_text(data)
+    result = client.post(
+        f"/api/reviews/{quote(review_id)}/decision",
+        {
+            "decision": decision,
+            "decision_text": text,
+            "decision_payload": {},
+            "source_platform": "discord",
+            "source_external_message_id": str(data.get("message", {}).get("id") or data.get("id")),
+        },
+    )
+    return f"Review {decision}: {result.get('status')}"
+
+
+def modal_payload(decision: str, review_id: str) -> dict[str, Any]:
+    label = "Correction" if decision == "correct" else "Clarifying question/detail"
+    return {
+        "type": 9,
+        "data": {
+            "custom_id": f"lifeos:modal:{decision}:{review_id}",
+            "title": f"LifeOS {decision}",
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 4,
+                            "custom_id": "text",
+                            "style": 2,
+                            "label": label,
+                            "required": True,
+                            "max_length": 1000,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def modal_text(data: dict[str, Any]) -> str:
+    for row in data.get("data", {}).get("components", []):
+        for component in row.get("components", []):
+            if component.get("custom_id") == "text":
+                return str(component.get("value", ""))
+    return ""
+
+
+def handle_message(token: str, client: LifeOSApiClient, data: dict[str, Any], owner_id: str) -> None:
+    author = data.get("author", {})
+    if not isinstance(author, dict) or str(author.get("id")) != owner_id or author.get("bot"):
+        return
+    content = str(data.get("content") or "").strip()
+    command = parse_legacy_command(content)
+    channel_id = str(data.get("channel_id"))
+    try:
+        if command is None:
+            try:
+                add_reaction(token, channel_id, str(data.get("id")), "👀")
+            except Exception:  # noqa: BLE001 - reaction is best effort
+                pass
+            response = run_chat_message(client, data)
+        else:
+            response = run_legacy_command(client, command, data)
+    except Exception as exc:  # noqa: BLE001
+        response = f"LifeOS failed: {exc}"
+    post_discord_message(token, channel_id, {"content": response[:1900]})
+
+
+def parse_legacy_command(content: str) -> dict[str, str] | None:
+    if content == "!help":
+        return {"name": "help", "text": ""}
+    if content == "!lifeos help":
+        return {"name": "help", "text": ""}
+    if content == "!today":
+        return {"name": "today", "text": ""}
+    if content == "!reviews":
+        return {"name": "reviews", "text": ""}
+    if content == "!status":
+        return {"name": "status", "text": ""}
+    if content.startswith("!capture "):
+        return {"name": "capture", "text": content.removeprefix("!capture ").strip()}
+    if content.startswith("!ask "):
+        return {"name": "ask", "text": content.removeprefix("!ask ").strip()}
+    return None
+
+
+def run_legacy_command(client: LifeOSApiClient, command: dict[str, str], message_data: dict[str, Any]) -> str:
+    if command["name"] == "help":
+        return help_text()
+    if command["name"] == "today":
+        return today_text(client)
+    if command["name"] == "reviews":
+        return reviews_text(client)
+    if command["name"] == "status":
+        return status_text(client)
+    if command["name"] == "ask":
+        return run_chat_message(client, {**message_data, "content": command["text"]})
+    response = client.post(
+        "/api/captures",
+        {
+            "source_platform": "discord",
+            "source_channel_id": str(message_data.get("channel_id")),
+            "external_message_id": str(message_data.get("id")),
+            "capture_kind": "text",
+            "raw_text": command["text"],
+            "metadata": {"owner_authenticated": True},
+        },
+    )
+    return str(response.get("message") or "Captured.")
+
+
+def run_chat_message(client: LifeOSApiClient, message_data: dict[str, Any]) -> str:
+    response = client.post(
+        "/api/chat",
+        {
+            "source_platform": "discord",
+            "external_channel_id": str(message_data.get("channel_id")),
+            "external_thread_id": _message_thread_id(message_data),
+            "external_message_id": str(message_data.get("id")),
+            "user_id": str(message_data.get("author", {}).get("id")),
+            "message": str(message_data.get("content") or ""),
+            "metadata": {"owner_authenticated": True},
+        },
+    )
+    return format_chat_response(response)
+
+
+def help_text() -> str:
+    return "\n".join(
+        [
+            "LifeOS commands:",
+            "`/lifeos new agent:<id> title:<title> iteration_cap:<n>`",
+            "`/lifeos thread agent:<id> title:<title> iteration_cap:<n>`",
+            "`/lifeos agent [agent:<id>]`, `/lifeos iterations [iteration_cap:<n>]`, `/lifeos cancel`",
+            "`/lifeos capture text:<text>`",
+            "`/lifeos ask message:<message>`",
+            "`/lifeos today`, `/lifeos reviews`, `/lifeos status`",
+            "`/lifeos agents`, `/lifeos providers`",
+            "`/lifeos model agent:<id> provider:<id> model:<model>`",
+            "`/lifeos autonomy agent:<id> mode:<safe|balanced|review_gated|manual>`",
+            "Fallback: `!help`, `!capture ...`, `!today`, `!reviews`, `!status`",
+        ]
+    )
+
+
+def resolve_discord_session(client: LifeOSApiClient, data: dict[str, Any], *, create: bool) -> dict[str, object]:
+    return client.post(
+        "/api/sessions/resolve",
+        {
+            "source_platform": "discord",
+            "external_channel_id": str(data.get("channel_id")),
+            "external_thread_id": _thread_id(data),
+            "create_if_missing": create,
+            "agent_id": "orchestrator",
+            "title": "LifeOS session",
+            "user_id": _user_id(data),
+            "metadata": {"resolved_from": "discord_slash"},
+        },
+    )
+
+
+def format_session_created(session: object, *, thread_id: str | None, created_thread: bool = False) -> str:
+    if not isinstance(session, dict):
+        return "Session create failed."
+    lines = [
+        "👀 New session created",
+        f"Agent: `{session.get('agent_id', 'orchestrator')}`",
+        f"Iteration cap: `{session.get('iteration_cap', 5)}`",
+        f"Session: `{session.get('id')}`",
+    ]
+    if thread_id:
+        lines.append(f"Thread: `{'created' if created_thread else 'bound'}:{thread_id}`")
+    return "\n".join(lines)
+
+
+def format_chat_response(response: dict[str, object]) -> str:
+    answer = str(response.get("answer") or "")
+    result = response.get("result", {})
+    if not answer and isinstance(result, dict):
+        answer = str(result.get("final_message_md") or result.get("status_summary") or "")
+    if not answer:
+        answer = "Done."
+    status = str(response.get("status") or (result.get("status") if isinstance(result, dict) else "completed"))
+    run_id = response.get("run_id")
+    suffix = f"\n\n`run`: {run_id} · `{status}`" if run_id else f"\n\n`{status}`"
+    return (answer + suffix)[:1900]
+
+
+def status_text(client: LifeOSApiClient) -> str:
+    readiness = client.get("/api/readiness")
+    providers = client.get("/api/providers")
+    configured = [
+        f"{provider.get('id')}:{sum(1 for key in provider.get('keys', []) if key.get('configured'))}"
+        for provider in providers.get("items", [])
+        if isinstance(provider, dict)
+    ]
+    return f"API: {readiness.get('status')} | providers: {', '.join(configured) or 'none'}"
+
+
+def today_text(client: LifeOSApiClient) -> str:
+    today = client.get("/api/today")
+    tasks = today.get("tasks", [])
+    lines = [str(today.get("focus", "Today"))]
+    if isinstance(tasks, list):
+        lines.extend(f"- {item.get('title')} ({item.get('domain')})" for item in tasks[:8] if isinstance(item, dict))
+    return "\n".join(lines[:10])
+
+
+def reviews_text(client: LifeOSApiClient) -> str:
+    payload = client.get("/api/reviews?status=pending&limit=10")
+    items = payload.get("items", [])
+    if not items:
+        return "No pending reviews."
+    return "\n".join(
+        f"- {item.get('title')} `{item.get('id')}`" for item in items if isinstance(item, dict)
+    )
+
+
+def agents_text(client: LifeOSApiClient) -> str:
+    payload = client.get("/api/agents")
+    items = payload.get("items", [])
+    return "\n".join(
+        f"- {item.get('id')} {item.get('autonomy_level')} {'on' if item.get('enabled') else 'off'}"
+        for item in items
+        if isinstance(item, dict)
+    )[:1900]
+
+
+def providers_text(client: LifeOSApiClient) -> str:
+    payload = client.get("/api/providers")
+    providers = payload.get("items", [])
+    models = payload.get("agent_models", {})
+    lines = [
+        f"- {item.get('id')} keys={sum(1 for key in item.get('keys', []) if key.get('configured'))}/{len(item.get('keys', []))}"
+        for item in providers
+        if isinstance(item, dict)
+    ]
+    if isinstance(models, dict):
+        lines.extend(
+            f"- {agent}: {model.get('primary', {}).get('provider')}/{model.get('primary', {}).get('model')}"
+            for agent, model in list(models.items())[:8]
+            if isinstance(model, dict)
+        )
+    return "\n".join(lines)[:1900] or "No providers."
+
+
+def _thread_id(data: dict[str, Any]) -> str | None:
+    channel = data.get("channel")
+    if isinstance(channel, dict) and int(channel.get("type", 0) or 0) in {10, 11, 12}:
+        return str(data.get("channel_id"))
+    return None
+
+
+def _message_thread_id(data: dict[str, Any]) -> str | None:
+    channel_type = data.get("channel_type")
+    if channel_type is not None and int(channel_type) in {10, 11, 12}:
+        return str(data.get("channel_id"))
+    channel = data.get("channel")
+    if isinstance(channel, dict) and int(channel.get("type", 0) or 0) in {10, 11, 12}:
+        return str(data.get("channel_id"))
+    return None
+
+
+def _user_id(data: dict[str, Any]) -> str | None:
+    user = data.get("user") or data.get("member", {}).get("user")
+    return str(user.get("id")) if isinstance(user, dict) else None
+
+
+def _is_owner(data: dict[str, Any], owner_id: str) -> bool:
+    user = data.get("user") or data.get("member", {}).get("user")
+    return isinstance(user, dict) and str(user.get("id")) == owner_id
+
+
+def message(content: str) -> dict[str, Any]:
+    return {"type": 4, "data": {"content": content[:1900]}}
+
+
+def ephemeral(content: str) -> dict[str, Any]:
+    return {"type": 4, "data": {"content": content[:1900], "flags": 64}}
 
 
 def main() -> None:
@@ -198,17 +855,23 @@ def main() -> None:
 
     token = os.environ["DISCORD_BOT_TOKEN"]
     channel_id = os.environ["DISCORD_APPROVAL_CHANNEL_ID"]
-    api_base = os.getenv("LIFEOS_API_BASE_URL", "http://api:8000")
+    client = LifeOSApiClient(os.getenv("LIFEOS_API_BASE_URL", "http://api:8000"))
     dry_run = env_flag("LIFEOS_GATEWAY_DRY_RUN")
     post_existing = env_flag("DISCORD_POST_EXISTING_ON_STARTUP")
 
+    try:
+        result = register_commands(token, dry_run=env_flag("DISCORD_COMMANDS_DRY_RUN", dry_run))
+        print(f"discord-gateway commands {result}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"discord-gateway command registration failed: {exc}", flush=True)
+
     poller = threading.Thread(
         target=review_poller,
-        args=(token, channel_id, api_base, dry_run, post_existing),
+        args=(token, channel_id, client, dry_run, post_existing),
         daemon=True,
     )
     poller.start()
-    asyncio.run(run_discord_gateway(token))
+    asyncio.run(run_discord_gateway(token, client))
 
 
 if __name__ == "__main__":

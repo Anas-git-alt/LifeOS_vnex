@@ -149,6 +149,45 @@ async def update_permission(
     )
 
 
+@router.patch("/tools/permissions/{permission_id}")
+async def patch_permission(
+    permission_id: str,
+    payload: ToolPermissionUpdate,
+    session: AsyncSession = Depends(db_session_dep),
+) -> dict[str, object]:
+    existing = await session.get(ToolPermission, permission_id)
+    if existing is None:
+        return {"ok": False, "status": "not_found"}
+    before = row_to_dict(
+        existing,
+        ["id", "agent_id", "tool_id", "effect", "mode", "scopes", "requires_approval_when"],
+    )
+    existing.agent_id = payload.agent_id
+    existing.tool_id = payload.tool_id
+    existing.effect = payload.effect
+    existing.mode = payload.mode
+    existing.scopes = payload.scopes
+    existing.requires_approval_when = payload.requires_approval_when
+    existing.updated_at = utc_now()
+    after = row_to_dict(
+        existing,
+        ["id", "agent_id", "tool_id", "effect", "mode", "scopes", "requires_approval_when"],
+    )
+    await create_audit_event(
+        session,
+        actor_type="user",
+        actor_id="owner",
+        event_type="tool_permission.updated",
+        entity_type="tool_permission",
+        entity_id=existing.id,
+        summary=f"{payload.agent_id} -> {payload.tool_id}: {payload.effect}",
+        before_json=before,
+        after_json=after,
+    )
+    await session.commit()
+    return {"ok": True, "permission": after}
+
+
 @router.post("/tools/calls")
 async def create_tool_call(
     payload: ToolCallCreate,
@@ -211,16 +250,33 @@ async def create_tool_call(
     await create_status_event(
         session,
         run_id=payload.run_id,
-        event_type="tool.requested",
+        event_type="tool.call_requested",
         title=f"Tool requested: {payload.tool_id}",
         visibility="discord_compact" if effect == "ask" else "web_only",
         detail_json={"tool_call_id": call.id, "effect": effect, "review_item_id": review_id},
     )
+    if effect == "allow":
+        await create_status_event(
+            session,
+            run_id=payload.run_id,
+            event_type="tool.call_started",
+            title=f"Tool started: {payload.tool_id}",
+            visibility="web_only",
+            detail_json={"tool_call_id": call.id},
+        )
+        await create_status_event(
+            session,
+            run_id=payload.run_id,
+            event_type="tool.call_finished",
+            title=f"Tool finished: {payload.tool_id}",
+            visibility="discord_compact",
+            detail_json={"tool_call_id": call.id, "status": call.status},
+        )
     await create_audit_event(
         session,
         actor_type="agent",
         actor_id=payload.agent_id,
-        event_type="tool.requested",
+        event_type="tool.call_requested",
         entity_type="tool_call",
         entity_id=call.id,
         summary=f"{payload.agent_id} requested {payload.tool_id}; policy={effect}",

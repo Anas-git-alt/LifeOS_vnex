@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lifeos-vnext"
 version = "0.1.0"
-description = "Discord-first, review-gated personal agent swarm."
+description = "Discord-first, escalation-gated personal agent swarm."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
   "redis>=5.0",
   "sqlalchemy>=2.0",
   "uvicorn[standard]>=0.30",
+  "websockets>=16,<17",
 ]
 
 [project.optional-dependencies]

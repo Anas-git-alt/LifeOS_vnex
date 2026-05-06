@@ -61,6 +61,74 @@ Restart gateways after `.env` changes:
 docker compose --profile gateways up -d --force-recreate discord-gateway web
 ```
 
+Register slash commands:
+
+```bash
+python3 scripts/setup_discord_commands.py --dry-run
+python3 scripts/setup_discord_commands.py
+```
+
+Required command env:
+
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_APPLICATION_ID` or a valid bot token that can resolve application metadata
+- `DISCORD_OWNER_USER_ID`
+- `DISCORD_GUILD_ID` for fast guild command registration, optional for global
+- `DISCORD_APPROVAL_CHANNEL_ID`
+
+## Commands
+
+Slash commands:
+
+- `/lifeos help`
+- `/lifeos new agent:<agent_id> title:<title> iteration_cap:<n>`
+- `/lifeos thread agent:<agent_id> title:<title> iteration_cap:<n>`
+- `/lifeos agent [agent:<agent_id>]`
+- `/lifeos iterations [iteration_cap:<n>]`
+- `/lifeos cancel`
+- `/lifeos status`
+- `/lifeos capture text:<text>`
+- `/lifeos today`
+- `/lifeos reviews`
+- `/lifeos ask message:<message>`
+- `/lifeos agents`
+- `/lifeos providers`
+- `/lifeos model agent:<agent_id> provider:<provider_id> model:<model>`
+- `/lifeos autonomy agent:<agent_id> mode:<safe|balanced|review_gated|manual>`
+- `/lifeos sync`
+
+Legacy fallbacks:
+
+- `!lifeos help`
+- normal owner messages in configured channels route to the active agent session
+- `!capture ...`
+- `!ask ...`
+- `!today`
+- `!reviews`
+- `!status`
+
+## Review Cards
+
+Pending reviews post to `#approval-queue` with buttons:
+
+- Approve applies the proposed command through API command bus.
+- Reject closes the review without mutation.
+- Correct opens a modal and appends correction text or replaces payload when provided by API clients.
+- Clarify opens a modal and marks the item `needs_clarification`.
+- Snooze hides it until later.
+- Done marks no-op/manual items complete.
+
+All button clicks call `POST /api/reviews/{review_id}/decision` with `source_platform=discord` and the Discord message id when available.
+
+## Agent Sessions
+
+- `/lifeos new` creates a session in the current channel and defaults to `orchestrator`.
+- `/lifeos thread` creates or binds a Discord thread where possible and stores the thread id on the session.
+- `/lifeos agent` shows or changes the selected agent for the current channel/thread.
+- `/lifeos iterations` shows or changes the session iteration cap.
+- Normal owner messages in LifeOS channels/threads call `/api/chat`.
+- Discord shows compact status and final answers; full traces stay in WebUI run/session pages.
+
 ## Manual Tests
 
 Read-only full probe:

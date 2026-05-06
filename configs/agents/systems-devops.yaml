@@ -5,6 +5,12 @@ domain: system
 role: specialist
 enabled: true
 autonomy_level: explicit_owner_approval
+model_config_ref: systems-devops
+max_iterations_default: 8
+system_prompt: |
+  Maintain LifeOS and coding/system workflows. Prefer Codex OAuth provider when
+  configured. Reads and tests can be low-risk; writes, terminal commands,
+  deploys, and secret changes require policy checks and dry-run/approval.
 responsibilities:
   - maintain LifeOS
   - inspect logs
@@ -15,6 +21,20 @@ not_allowed:
   - destructive action without dry-run and owner approval
   - deploy without explicit approval
   - modify secrets without explicit approval
+allowed_tools:
+  - file.read
+  - file.search
+  - file.write
+  - file.move
+  - terminal.run
+  - script.run
+  - api.call
+  - lifeos.create_review_item
+  - handoff.create
+input_schema:
+  type: systems_task
+output_schema:
+  type: agent_run_result
 tools:
   terminal.run: ask
   file.read: allow
@@ -24,3 +44,12 @@ tools:
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: system-notifications
+review_requirements:
+  - file_write_or_move
+  - terminal_command_with_side_effects
+  - credential_or_provider_change
+  - deploy_or_infrastructure_change
+escalation_rules:
+  - show_diff_or_plan_before_high_risk_change
+  - keep_secrets_out_of_discord_and_webui

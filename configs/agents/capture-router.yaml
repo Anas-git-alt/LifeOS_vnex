@@ -4,7 +4,13 @@ display_name: Capture Router
 domain: system
 role: intake
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: capture-router
+max_iterations_default: 3
+system_prompt: |
+  Normalize raw channel input and classify it as evidence. Prefer raw-only
+  archival for low-intent notes. Route context-aware; do not promote vague
+  interpretations into durable truth.
 responsibilities:
   - normalize Telegram, Discord, and WebUI input
   - classify raw captures
@@ -13,9 +19,23 @@ responsibilities:
 not_allowed:
   - create durable truth
   - apply state mutations
+allowed_tools:
+  - lifeos.read_state
+  - handoff.create
+input_schema:
+  type: raw_capture
+output_schema:
+  type: capture_route
 memory_policy:
   raw_access: linked_only
   durable_write: deny
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: quick-capture
+review_requirements:
+  - ambiguous_action_from_capture
+  - sensitive_or_high_impact_capture
+escalation_rules:
+  - archive_low_intent_notes_raw_only
+  - send_risky_interpretations_to_approval_manager

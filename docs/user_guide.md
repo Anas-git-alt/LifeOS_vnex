@@ -1,6 +1,6 @@
 # LifeOS vNext User Guide
 
-This guide helps you verify that LifeOS vNext is working as a Discord-first, review-gated personal agent swarm. It focuses on the local development stack and safe checks you can run without mutating anything important.
+This guide helps you verify that LifeOS vNext is working as a Discord-first, escalation-gated personal agent swarm. It focuses on the local development stack and safe checks you can run without mutating anything important.
 
 ## What Working Well Looks Like
 
@@ -10,12 +10,15 @@ A healthy local LifeOS stack should have:
 - `/api/health` returning `ok`.
 - `/api/readiness` returning `ready` or clear configuration warnings.
 - WebUI loading at `http://localhost:5173`.
-- A raw capture creating vault evidence, an agent run, status events, and a pending review item.
+- A capture creating vault evidence, an agent run, status events, and a policy result.
+- Random low-intent notes archived raw-only without review clutter.
+- Low-risk reversible notes/tasks can complete autonomously and report afterward.
+- Finance/family/health/sensitive memory/tool/provider/file actions escalate when risky or ambiguous.
 - Approval of that review item creating state only through the command bus.
 - Audit events recording the mutation.
 - Provider and gateway configuration visible without exposing secrets.
 
-The key invariant: raw capture is evidence, AI output is a draft, and durable state changes happen only after review or an explicit safe policy.
+The key invariant: raw capture is evidence, AI output is contextual working state, and durable state changes happen only through controlled audited services. Review is for risk, ambiguity, sensitivity, external effects, destructive actions, and weak evidence.
 
 ## Start The System
 
@@ -97,6 +100,95 @@ Expected strong result:
 
 If you do not want the probe to contact Discord, omit `--discord-read-only`.
 
+## Daily Use
+
+Discord:
+
+```text
+/lifeos status
+/lifeos new agent:orchestrator title:Plan today iteration_cap:5
+/lifeos thread agent:research title:Research references iteration_cap:5
+/lifeos agent agent:work.generic
+/lifeos iterations iteration_cap:8
+/lifeos cancel
+/lifeos capture text:submit HR paper Monday
+/lifeos ask message:what should I do today?
+/lifeos reviews
+/lifeos agents
+/lifeos providers
+/lifeos model agent:work.generic provider:openrouter model:openai/gpt-5.2-mini
+/lifeos autonomy agent:deen-prayer mode:balanced
+```
+
+Legacy fallbacks:
+
+```text
+!status
+!capture submit HR paper Monday
+!today
+!reviews
+```
+
+Telegram:
+
+```text
+/capture submit HR paper Monday
+/ask summarize my pending work
+/today
+/status
+```
+
+Normal Telegram messages are still captured. Low-intent notes are archived raw-only; complex decisions move to Discord review.
+
+WebUI:
+
+- Use `Add Capture` for web captures.
+- Use `Review Queue` buttons to approve, reject, correct, clarify, snooze, or mark done.
+- Use `Agents` to enable/disable agents, choose autonomy, and edit primary/secondary provider models.
+- Use `Providers` to test provider readiness without exposing raw keys.
+- Use `Tool Permissions` to set `allow`, `ask`, or `deny`.
+- Use `Runs` to inspect status events, handoffs, provider calls, tool calls, reviews, and audit events.
+
+## Agent Session Test
+
+Create or reuse a WebUI/API session and run one low-risk message:
+
+```bash
+curl -fsS -X POST http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_platform": "web",
+    "external_channel_id": "manual-test",
+    "message": "File this as a low-risk planning note for LifeOS testing.",
+    "iteration_cap": 3,
+    "metadata": {"owner_authenticated": true}
+  }'
+```
+
+Expected behavior:
+
+- A session is created or reused.
+- A run is created with an iteration cap.
+- Status events show receive/classify/select/act.
+- If policy allows it, a low-risk note is created autonomously through the command bus and audited.
+- The response includes a compact final answer and `what_i_did_md`.
+
+Send a correction:
+
+```bash
+curl -fsS -X POST http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_platform": "web",
+    "external_channel_id": "manual-test",
+    "message": "Actually do not make similar notes into reminders unless I ask.",
+    "iteration_cap": 3,
+    "metadata": {"owner_authenticated": true}
+  }'
+```
+
+Expected behavior: the correction links to the prior session/run where possible and creates a low-risk preference candidate without promoting sensitive durable memory.
+
 ## Write-Path End-To-End Test
 
 Use a harmless test capture you are comfortable keeping in the local dev audit trail.
@@ -114,7 +206,7 @@ curl -fsS -X POST http://localhost:8000/api/captures \
   }'
 ```
 
-The response should include a capture id and usually a `review_item_id`.
+The response includes `route.decision`. Random notes can return `raw_only`; work/finance/actions usually return a `review_item_id`.
 
 Find pending reviews:
 
@@ -151,9 +243,9 @@ You should see:
 - An audit event after approval.
 - A new open task in Today after approval.
 
-## Review-Gated Domain Checks
+## Escalation Domain Checks
 
-These checks verify that domain captures become review items before state changes.
+These checks verify that sensitive or high-impact domain captures become review items before state changes.
 
 Work task:
 
@@ -163,7 +255,7 @@ curl -fsS -X POST http://localhost:8000/api/captures \
   -d '{"source_platform":"web","capture_kind":"text","raw_text":"Need to submit the HR tax return paper request before Monday at 4:30pm"}'
 ```
 
-Expected behavior: a work/task review item is created. The task should not appear as approved operational state until the review is approved.
+Expected behavior: if the work action is ambiguous or high impact, a review item is created. Clear low-risk work notes/tasks may auto-apply in `balanced` mode and report afterward.
 
 Finance capture:
 
@@ -206,7 +298,7 @@ curl -fsS -X POST http://localhost:8000/api/jobs \
   }'
 ```
 
-Expected behavior: job creation is review-gated.
+Expected behavior: job creation is escalation-gated and waits for review.
 
 Tool approval:
 

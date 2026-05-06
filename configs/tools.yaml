@@ -51,6 +51,14 @@ tools:
     display_name: Write memory candidate
     category: memory
     risk_level: reversible_internal_write
+  lifeos.write_preference_candidate:
+    display_name: Write preference candidate
+    category: memory
+    risk_level: reversible_internal_write
+  lifeos.apply_correction:
+    display_name: Apply safe correction
+    category: lifeos
+    risk_level: reversible_internal_write
   lifeos.write_curated_memory:
     display_name: Write curated memory
     category: memory
@@ -68,6 +76,15 @@ tools:
     category: filesystem
     risk_level: file_write_or_move
     requires_backup: true
+  file.move:
+    display_name: Move file
+    category: filesystem
+    risk_level: file_write_or_move
+    requires_backup: true
+  file.search:
+    display_name: Search files
+    category: filesystem
+    risk_level: sensitive_internal_read
   terminal.run:
     display_name: Run terminal command
     category: system
@@ -81,6 +98,14 @@ tools:
     display_name: Web fetch
     category: external
     risk_level: external_read
+  api.call:
+    display_name: Call external API
+    category: external
+    risk_level: external_side_effect
+  script.run:
+    display_name: Run approved script
+    category: system
+    risk_level: destructive_or_sensitive_action
 
 agent_permissions:
   orchestrator:
@@ -91,6 +116,10 @@ agent_permissions:
     handoff.create:
       effect: allow
     lifeos.create_review_item:
+      effect: allow
+    lifeos.write_preference_candidate:
+      effect: allow
+    lifeos.apply_correction:
       effect: allow
     file.read:
       effect: deny
@@ -108,6 +137,8 @@ agent_permissions:
       effect: allow
     handoff.create:
       effect: allow
+    lifeos.write_preference_candidate:
+      effect: allow
     file.read:
       effect: ask
     file.write:
@@ -124,6 +155,8 @@ agent_permissions:
       effect: ask
     lifeos.search_memory:
       effect: allow
+    lifeos.write_preference_candidate:
+      effect: ask
     web.search:
       effect: deny
     file.read:
@@ -137,7 +170,19 @@ agent_permissions:
       scopes:
         paths:
           - /workspace/lifeos-vnext
+    file.search:
+      effect: allow
+      scopes:
+        paths:
+          - /workspace/lifeos-vnext
     file.write:
+      effect: ask
+      scopes:
+        paths:
+          - /workspace/lifeos-vnext
+      require_diff: true
+      require_backup: true
+    file.move:
       effect: ask
       scopes:
         paths:
@@ -159,3 +204,7 @@ agent_permissions:
         - sudo
     provider_keys.modify:
       effect: deny
+    script.run:
+      effect: ask
+    api.call:
+      effect: ask

@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 
 def main() -> int:
-    print(json.dumps({"status": "scaffold", "exported_at": datetime.now(UTC).isoformat()}))
+    print(json.dumps({"status": "scaffold", "exported_at": datetime.now(timezone.utc).isoformat()}))
     return 0
 
 

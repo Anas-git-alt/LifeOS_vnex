@@ -183,6 +183,40 @@ class Agent(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class AgentModelConfig(Base, TimestampMixin):
+    __tablename__ = "agent_model_configs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    primary_provider_id: Mapped[str | None] = mapped_column(String(64))
+    primary_model: Mapped[str | None] = mapped_column(Text)
+    secondary_provider_id: Mapped[str | None] = mapped_column(String(64))
+    secondary_model: Mapped[str | None] = mapped_column(Text)
+    fallback_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class ProviderRuntimeConfig(Base, TimestampMixin):
+    __tablename__ = "provider_runtime_configs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_url: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    key_refs_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class SystemSetting(Base, TimestampMixin):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    description: Mapped[str | None] = mapped_column(Text)
+
+
 class AgentSession(Base, TimestampMixin):
     __tablename__ = "agent_sessions"
 
@@ -193,6 +227,16 @@ class AgentSession(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     memory_scope: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    iteration_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    source_platform: Mapped[str | None] = mapped_column(String(32))
+    external_channel_id: Mapped[str | None] = mapped_column(Text)
+    external_thread_id: Mapped[str | None] = mapped_column(Text)
+    external_message_id: Mapped[str | None] = mapped_column(Text)
+    last_run_id: Mapped[str | None] = mapped_column(String(64))
+    last_user_correction_id: Mapped[str | None] = mapped_column(String(64))
+    paused_run_id: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class Message(Base):
@@ -205,7 +249,10 @@ class Message(Base):
     content_md: Mapped[str | None] = mapped_column(Text)
     content_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     source_platform: Mapped[str | None] = mapped_column(String(32))
+    source_external_channel_id: Mapped[str | None] = mapped_column(Text)
+    source_external_thread_id: Mapped[str | None] = mapped_column(Text)
     source_external_message_id: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -225,6 +272,11 @@ class AgentRun(Base, TimestampMixin):
     cost_usd: Mapped[float | None] = mapped_column(Numeric)
     token_usage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     trace_id: Mapped[str | None] = mapped_column(String(128))
+    iteration_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    current_iteration: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -249,10 +301,16 @@ class Handoff(Base, TimestampMixin):
     to_agent_id: Mapped[str] = mapped_column(String(128), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     task_md: Mapped[str] = mapped_column(Text, nullable=False)
+    known_context: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     context_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    constraints: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     expected_output_schema: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    summary_md: Mapped[str | None] = mapped_column(Text)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="web")
+    requires_user_visibility: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     discord_summary_posted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -55,7 +55,17 @@ async def readiness(settings: Settings = Depends(settings_dep)) -> ReadinessResp
             ok=bool(settings.telegram_bot_token and settings.telegram_owner_user_id),
             detail="bot token and owner id configured"
             if settings.telegram_bot_token and settings.telegram_owner_user_id
-            else "missing Telegram token or owner id",
+                else "missing Telegram token or owner id",
+        ),
+        ReadinessStatus(
+            name="router_mode",
+            ok=settings.router_mode in {"agentic", "deterministic", "hybrid"},
+            detail=settings.router_mode,
+        ),
+        ReadinessStatus(
+            name="providers_configured",
+            ok=any(count > 0 for count in settings.provider_key_counts.values()),
+            detail=", ".join(f"{key}={value}" for key, value in settings.provider_key_counts.items()),
         ),
     ]
 

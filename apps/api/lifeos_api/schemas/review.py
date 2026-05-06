@@ -1,9 +1,10 @@
 """Review and approval API contracts."""
 
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+from lifeos_core.compat import StrEnum
 
 
 class ReviewStatus(StrEnum):

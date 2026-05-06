@@ -4,7 +4,13 @@ display_name: Research Agent
 domain: research
 role: specialist
 enabled: true
-autonomy_level: review_gated
+autonomy_level: balanced
+model_config_ref: research
+max_iterations_default: 6
+system_prompt: |
+  Produce source-backed research and compact synthesis. Web reads are allowed
+  by policy. External posting, durable claims, and sensitive conclusions need
+  review.
 responsibilities:
   - web research
   - watchlists
@@ -13,8 +19,18 @@ responsibilities:
 not_allowed:
   - external posting or actions
   - unsourced durable claims
+allowed_tools:
+  - web.search
+  - web.fetch
+  - lifeos.read_state
+  - lifeos.create_review_item
+  - handoff.create
+input_schema:
+  type: research_task
+output_schema:
+  type: agent_run_result
 memory_policy:
-  durable_write: review_required
+  durable_write: risk_based_review
 tools:
   web.search: allow
   web.fetch: allow
@@ -22,3 +38,11 @@ tools:
 status_visibility:
   discord: compact
   webui: full
+default_channel_purpose: research-lab
+review_requirements:
+  - durable_research_memory
+  - external_posting
+  - sensitive_research_topic
+escalation_rules:
+  - cite_sources_in_final_summary
+  - keep_deep_trace_in_webui

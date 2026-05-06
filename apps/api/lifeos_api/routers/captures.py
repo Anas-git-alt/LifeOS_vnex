@@ -16,7 +16,11 @@ from lifeos_api.db.models import (
 from lifeos_api.deps import db_session_dep, settings_dep
 from lifeos_api.schemas.capture import CaptureCreate
 from lifeos_api.services.audit import create_audit_event
+from lifeos_api.services.agentic_router import route_capture_agentically
+from lifeos_api.services.command_bus import CommandBus, CommandRequest
 from lifeos_api.services.orchestrator import draft_from_capture
+from lifeos_api.services.policy_engine import decide_capture_action
+from lifeos_api.services.runtime_config import get_agent_autonomy, get_router_mode
 from lifeos_api.services.serialization import row_to_dict
 from lifeos_api.services.status_events import create_status_event
 from lifeos_api.services.vault import VaultWriter
@@ -61,12 +65,6 @@ async def create_capture(
         metadata=metadata,
     )
 
-    draft = draft_from_capture(
-        capture_id=capture_id,
-        raw_text=payload.raw_text,
-        platform=payload.source_platform,
-    )
-
     capture = RawCapture(
         id=capture_id,
         source_platform=payload.source_platform,
@@ -78,8 +76,8 @@ async def create_capture(
         raw_text=payload.raw_text,
         raw_uri=raw_uri,
         content_hash=digest,
-        status="routed",
-        sensitivity=draft.sensitivity,
+        status="received",
+        sensitivity=payload.sensitivity,
         received_at=payload.received_at,
         created_at=now,
         updated_at=now,
@@ -93,11 +91,11 @@ async def create_capture(
         root_capture_id=capture.id,
         initiating_user_id=None,
         orchestrator_agent_id="orchestrator",
-        active_agent_id=draft.agent_id,
-        status="waiting_approval",
-        status_summary=f"Routed to {draft.agent_id}",
-        provider_used="deterministic",
-        model_used="capture-router-v1",
+        active_agent_id="capture-router",
+        status="routing",
+        status_summary="Routing capture",
+        provider_used=None,
+        model_used=None,
         cost_usd=0,
         token_usage_json={"input_tokens": 0, "output_tokens": 0},
         trace_id=new_id("trace"),
@@ -107,6 +105,52 @@ async def create_capture(
     )
     session.add(run)
     await session.flush()
+
+    await create_status_event(
+        session,
+        run_id=run.id,
+        event_type="capture.received",
+        title="Received capture",
+        visibility="discord_compact",
+        detail_json={"capture_id": capture.id, "source_platform": payload.source_platform},
+    )
+    await create_status_event(
+        session,
+        run_id=run.id,
+        event_type="capture.routing",
+        title="Routing/classifying capture",
+        visibility="discord_compact",
+        detail_json={"capture_id": capture.id},
+    )
+
+    router_mode = await get_router_mode(session, settings.router_mode)
+    try:
+        draft, provider_meta = await route_capture_agentically(
+            session=session,
+            settings=settings,
+            capture_id=capture_id,
+            raw_text=payload.raw_text,
+            platform=payload.source_platform,
+            run_id=run.id,
+            router_mode=router_mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - ingestion must never lose raw evidence
+        draft = draft_from_capture(
+            capture_id=capture_id,
+            raw_text=payload.raw_text,
+            platform=payload.source_platform,
+        )
+        provider_meta = {
+            "provider": "deterministic",
+            "model": "capture-router-v1",
+            "fallback_used": True,
+            "fallback_reason": str(exc)[:500],
+        }
+
+    capture.sensitivity = draft.sensitivity
+    run.active_agent_id = draft.agent_id
+    run.provider_used = str(provider_meta.get("provider"))
+    run.model_used = str(provider_meta.get("model"))
 
     interpretation = CaptureInterpretation(
         id=new_id("interp"),
@@ -121,10 +165,30 @@ async def create_capture(
         confidence=draft.confidence,
         missing_context=draft.missing_context or [],
         risk_level=draft.risk_level,
-        status="promoted_to_review",
+        status="drafted",
         created_at=now,
     )
     session.add(interpretation)
+
+    autonomy_mode = await get_agent_autonomy(session, draft.agent_id)
+    owner_authenticated = bool(payload.metadata.get("owner_authenticated", True))
+    policy = decide_capture_action(
+        action=draft.proposed_action,
+        confidence=draft.confidence,
+        sensitivity=draft.sensitivity,
+        autonomy_mode=autonomy_mode,
+        owner_authenticated=owner_authenticated,
+        missing_context=draft.missing_context or [],
+        intent_labels=draft.intent_labels,
+    )
+    await create_status_event(
+        session,
+        run_id=run.id,
+        event_type="policy.decision",
+        title=f"Policy: {policy.decision}",
+        visibility="discord_compact",
+        detail_json=policy.as_dict(),
+    )
 
     handoff = Handoff(
         id=new_id("hnd"),
@@ -132,7 +196,7 @@ async def create_capture(
         from_agent_id="capture-router",
         to_agent_id=draft.agent_id,
         reason=f"Capture classified as {draft.domain}",
-        task_md=f"Draft review-gated action for capture {capture.id}.",
+        task_md=f"Classify capture {capture.id} and apply policy.",
         context_refs=[{"kind": "raw_capture", "id": capture.id, "uri": raw_uri}],
         expected_output_schema={"type": "review_item"},
         status="returned",
@@ -144,55 +208,6 @@ async def create_capture(
     )
     session.add(handoff)
 
-    review = ReviewItem(
-        id=new_id("rev"),
-        kind=draft.domain,
-        title=draft.title,
-        body_md=draft.body_md,
-        source_capture_id=capture.id,
-        source_uri=raw_uri,
-        proposed_by_agent_id=draft.agent_id,
-        assigned_agent_id="approval-manager",
-        priority="normal",
-        confidence=draft.confidence,
-        risk_level=draft.risk_level,
-        sensitivity=draft.sensitivity,
-        proposed_action_json=draft.proposed_action,
-        validation_json={"missing_context": draft.missing_context or []},
-        status="pending",
-        expires_at=None,
-        snoozed_until=None,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(review)
-    await session.flush()
-
-    notification = Notification(
-        id=new_id("notif"),
-        target_platform="discord",
-        target_channel_id=None,
-        notification_type="review.created",
-        title=draft.title,
-        body_md=draft.body_md,
-        status="queued",
-        related_run_id=run.id,
-        related_review_item_id=review.id,
-        external_message_id=None,
-        error_json=None,
-        created_at=now,
-        sent_at=None,
-    )
-    session.add(notification)
-
-    await create_status_event(
-        session,
-        run_id=run.id,
-        event_type="capture.received",
-        title="Received capture",
-        visibility="discord_compact",
-        detail_json={"capture_id": capture.id},
-    )
     await create_status_event(
         session,
         run_id=run.id,
@@ -201,23 +216,127 @@ async def create_capture(
         visibility="discord_compact",
         detail_json={"handoff_id": handoff.id},
     )
-    await create_status_event(
-        session,
-        run_id=run.id,
-        event_type="review.created",
-        title=f"Review created: {draft.title}",
-        visibility="discord_compact",
-        detail_json={"review_item_id": review.id},
-    )
+
+    review: ReviewItem | None = None
+    notification: Notification | None = None
+    state_change_id: str | None = None
+    route_decision = policy.decision
+    message = ""
+
+    if policy.decision == "raw_only":
+        capture.status = "raw_only"
+        interpretation.status = "archived_raw_only"
+        run.status = "completed"
+        run.status_summary = "Captured as raw context; no approval needed."
+        run.finished_at = now
+        message = "Captured as raw context. No approval needed."
+    elif policy.decision == "auto_apply":
+        command_result = await CommandBus(session, settings).apply(
+            CommandRequest(
+                command_type=str(draft.proposed_action["command_type"]),
+                payload=dict(draft.proposed_action.get("payload", {})),
+                source_review_item_id=None,
+                actor_type="system",
+                actor_id="policy-engine",
+            )
+        )
+        state_change_id = command_result.state_change_id
+        capture.status = "auto_applied" if command_result.status == "applied" else "failed"
+        interpretation.status = "auto_applied"
+        run.status = "completed" if command_result.status == "applied" else "failed"
+        run.status_summary = f"Auto-applied {draft.proposed_action['command_type']}"
+        run.finished_at = now
+        message = f"Done: {run.status_summary}."
+    elif policy.decision in {"review_required", "ask_clarification"}:
+        review = ReviewItem(
+            id=new_id("rev"),
+            kind=draft.domain,
+            title=draft.title,
+            body_md=draft.body_md,
+            source_capture_id=capture.id,
+            source_uri=raw_uri,
+            proposed_by_agent_id=draft.agent_id,
+            assigned_agent_id="approval-manager",
+            priority="normal",
+            confidence=draft.confidence,
+            risk_level=draft.risk_level,
+            sensitivity=draft.sensitivity,
+            proposed_action_json=draft.proposed_action,
+            validation_json={"missing_context": draft.missing_context or [], "policy": policy.as_dict()},
+            status="pending" if policy.decision == "review_required" else "needs_clarification",
+            expires_at=None,
+            snoozed_until=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(review)
+        await session.flush()
+
+        notification = Notification(
+            id=new_id("notif"),
+            target_platform="discord",
+            target_channel_id=None,
+            notification_type="review.created",
+            title=draft.title,
+            body_md=draft.body_md,
+            status="queued",
+            related_run_id=run.id,
+            related_review_item_id=review.id,
+            external_message_id=None,
+            error_json=None,
+            created_at=now,
+            sent_at=None,
+        )
+        session.add(notification)
+
+        capture.status = "waiting_approval" if policy.decision == "review_required" else "needs_clarification"
+        interpretation.status = "promoted_to_review"
+        run.status = "waiting_approval" if policy.decision == "review_required" else "needs_clarification"
+        run.status_summary = (
+            f"Waiting for approval: {draft.title}"
+            if policy.decision == "review_required"
+            else f"Needs clarification: {draft.title}"
+        )
+        message = (
+            f"Captured. Review needed: {draft.title}"
+            if policy.decision == "review_required"
+            else f"Captured. Clarification needed: {draft.title}"
+        )
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type="review.created",
+            title=f"Review created: {draft.title}",
+            visibility="discord_compact",
+            detail_json={"review_item_id": review.id},
+        )
+    else:
+        capture.status = "rejected"
+        interpretation.status = "rejected_by_policy"
+        run.status = "rejected"
+        run.status_summary = policy.reason
+        run.finished_at = now
+        route_decision = "reject"
+        message = f"Capture rejected by policy: {policy.reason}"
+
+    run.updated_at = now
+    capture.updated_at = now
+
     await create_audit_event(
         session,
-        actor_type="system",
-        actor_id="capture-router",
-        event_type="capture.routed",
+        actor_type="agent",
+        actor_id=draft.agent_id,
+        event_type="capture.policy_routed",
         entity_type="raw_capture",
         entity_id=capture.id,
-        summary=f"Capture routed to {draft.agent_id} and promoted to review.",
-        after_json={"review_item_id": review.id, "run_id": run.id},
+        summary=f"Capture routed to {draft.agent_id}; policy={policy.decision}.",
+        after_json={
+            "review_item_id": review.id if review else None,
+            "run_id": run.id,
+            "state_change_id": state_change_id,
+            "policy": policy.as_dict(),
+            "provider": provider_meta,
+        },
         trace_id=run.trace_id,
     )
     await session.commit()
@@ -226,8 +345,20 @@ async def create_capture(
         "capture": row_to_dict(capture, CAPTURE_FIELDS),
         "run_id": run.id,
         "handoff_id": handoff.id,
-        "review_item_id": review.id,
-        "notification_id": notification.id,
+        "route": {
+            "agent_id": draft.agent_id,
+            "domain": draft.domain,
+            "decision": route_decision,
+            "reason": policy.reason,
+            "confidence": draft.confidence,
+            "provider": provider_meta.get("provider"),
+            "model": provider_meta.get("model"),
+            "fallback_used": provider_meta.get("fallback_used", False),
+        },
+        "review_item_id": review.id if review else None,
+        "state_change_id": state_change_id,
+        "notification_id": notification.id if notification else None,
+        "message": message,
     }
 
 

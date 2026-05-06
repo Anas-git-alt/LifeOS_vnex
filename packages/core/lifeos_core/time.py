@@ -1,7 +1,9 @@
 """Time helpers."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from lifeos_core.compat import UTC
 
 
 def utc_now() -> datetime:
