@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lifeos.local/protocols/handoff.schema.json",
+  "title": "LifeOS Agent Handoff",
+  "type": "object",
+  "required": ["handoff_id", "parent_run_id", "from_agent", "to_agent", "reason", "task", "context_refs", "constraints", "visibility"],
+  "properties": {
+    "handoff_id": { "type": "string" },
+    "parent_run_id": { "type": "string" },
+    "from_agent": { "type": "string" },
+    "to_agent": { "type": "string" },
+    "reason": { "type": "string" },
+    "task": {
+      "type": "object",
+      "required": ["type", "summary", "user_visible_goal"],
+      "properties": {
+        "type": { "type": "string" },
+        "summary": { "type": "string" },
+        "user_visible_goal": { "type": "string" }
+      }
+    },
+    "context_refs": { "type": "array", "items": { "type": "object" } },
+    "constraints": { "type": "object" },
+    "expected_output_schema": { "type": "object" },
+    "visibility": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lifeos-vnext"
+version = "0.1.0"
+description = "Discord-first, review-gated personal agent swarm."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.13",
+  "asyncpg>=0.29",
+  "fastapi>=0.115",
+  "greenlet>=3.0",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "psycopg[binary]>=3.2",
+  "pyyaml>=6.0",
+  "redis>=5.0",
+  "sqlalchemy>=2.0",
+  "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "mypy>=1.10",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.5",
+]
+
+[tool.setuptools.packages.find]
+where = [
+  "apps/api",
+  "apps/worker",
+  "apps/discord-gateway",
+  "apps/telegram-gateway",
+  "packages/core",
+  "packages/agents",
+  "packages/tools",
+  "packages/providers",
+]
+include = [
+  "lifeos_api*",
+  "lifeos_worker*",
+  "discord_gateway*",
+  "telegram_gateway*",
+  "lifeos_core*",
+  "lifeos_agents*",
+  "lifeos_tools*",
+  "lifeos_providers*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/api/tests"]
+pythonpath = [
+  "apps/api",
+  "apps/worker",
+  "apps/discord-gateway",
+  "apps/telegram-gateway",
+  "packages/core",
+  "packages/agents",
+  "packages/tools",
+  "packages/providers",
+]

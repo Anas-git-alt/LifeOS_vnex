@@ -1,0 +1,36 @@
+version: 1
+
+bot:
+  owner_env: TELEGRAM_OWNER_USER_ID
+  token_env: TELEGRAM_BOT_TOKEN
+  mode: raw_capture
+
+accepted_capture_kinds:
+  - text
+  - voice
+  - image
+  - screenshot
+  - document
+  - link
+  - forwarded_message
+
+default_acknowledgements:
+  text: "Captured. I'll sort it and surface anything that needs review in Discord."
+  voice: "Captured voice note. Transcribing and routing."
+  image: "Captured image. I'll extract what I can and ask in Discord if unclear."
+  document: "Captured attachment. I'll extract what I can and ask in Discord if unclear."
+
+commands:
+  status:
+    enabled: true
+    description: Compact system status.
+  today:
+    enabled: true
+    description: Compact Today summary.
+  help:
+    enabled: true
+    description: Capture guidance.
+
+approval_ui:
+  enabled: false
+  note: Discord remains the primary approval and correction surface.

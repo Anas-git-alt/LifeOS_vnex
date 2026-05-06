@@ -1,0 +1,140 @@
+x-lifeos-env: &lifeos-env
+  LIFEOS_ENV: ${LIFEOS_ENV:-development}
+  LIFEOS_TIMEZONE: ${LIFEOS_TIMEZONE:-Africa/Casablanca}
+  LIFEOS_API_BASE_URL: ${LIFEOS_API_BASE_URL:-http://api:8000}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lifeos:lifeos@postgres:5432/lifeos}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+  DISCORD_OWNER_USER_ID: ${DISCORD_OWNER_USER_ID:-}
+  DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+  DISCORD_APPROVAL_CHANNEL_ID: ${DISCORD_APPROVAL_CHANNEL_ID:-}
+  DISCORD_DASHBOARD_CHANNEL_ID: ${DISCORD_DASHBOARD_CHANNEL_ID:-}
+  DISCORD_DAILY_PLAN_CHANNEL_ID: ${DISCORD_DAILY_PLAN_CHANNEL_ID:-}
+  DISCORD_QUICK_CAPTURE_CHANNEL_ID: ${DISCORD_QUICK_CAPTURE_CHANNEL_ID:-}
+  DISCORD_BOT_TESTING_CHANNEL_ID: ${DISCORD_BOT_TESTING_CHANNEL_ID:-}
+  DISCORD_WORK_TRACKER_CHANNEL_ID: ${DISCORD_WORK_TRACKER_CHANNEL_ID:-}
+  DISCORD_FINANCE_TRACKER_CHANNEL_ID: ${DISCORD_FINANCE_TRACKER_CHANNEL_ID:-}
+  DISCORD_PRAYER_TRACKER_CHANNEL_ID: ${DISCORD_PRAYER_TRACKER_CHANNEL_ID:-}
+  DISCORD_HABITS_HEALTH_CHANNEL_ID: ${DISCORD_HABITS_HEALTH_CHANNEL_ID:-}
+  DISCORD_FAMILY_COMMITMENTS_CHANNEL_ID: ${DISCORD_FAMILY_COMMITMENTS_CHANNEL_ID:-}
+  DISCORD_AGENT_HANDOFFS_CHANNEL_ID: ${DISCORD_AGENT_HANDOFFS_CHANNEL_ID:-}
+  DISCORD_AGENT_RUNS_CHANNEL_ID: ${DISCORD_AGENT_RUNS_CHANNEL_ID:-}
+  DISCORD_MEMORY_REVIEW_CHANNEL_ID: ${DISCORD_MEMORY_REVIEW_CHANNEL_ID:-}
+  DISCORD_RESEARCH_LAB_CHANNEL_ID: ${DISCORD_RESEARCH_LAB_CHANNEL_ID:-}
+  DISCORD_SYSTEM_NOTIFICATIONS_CHANNEL_ID: ${DISCORD_SYSTEM_NOTIFICATIONS_CHANNEL_ID:-}
+  DISCORD_AUDIT_LOG_CHANNEL_ID: ${DISCORD_AUDIT_LOG_CHANNEL_ID:-}
+  DISCORD_DEAD_LETTER_CHANNEL_ID: ${DISCORD_DEAD_LETTER_CHANNEL_ID:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_OWNER_USER_ID: ${TELEGRAM_OWNER_USER_ID:-}
+  OPENROUTER_API_KEY_1: ${OPENROUTER_API_KEY_1:-}
+  OPENROUTER_API_KEY_2: ${OPENROUTER_API_KEY_2:-}
+  NVIDIA_NIM_API_KEY_1: ${NVIDIA_NIM_API_KEY_1:-}
+  NVIDIA_NIM_API_KEY_2: ${NVIDIA_NIM_API_KEY_2:-}
+  CODEX_HOME: ${CODEX_HOME:-/secrets/codex}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: lifeos
+      POSTGRES_PASSWORD: lifeos
+      POSTGRES_DB: lifeos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lifeos -d lifeos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      <<: *lifeos-env
+      LIFEOS_VAULT_PATH: /app/vault
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./vault:/app/vault
+      - ./configs:/app/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://localhost:8000/api/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      <<: *lifeos-env
+      LIFEOS_VAULT_PATH: /app/vault
+    volumes:
+      - ./vault:/app/vault
+      - ./configs:/app/configs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      LIFEOS_WEB_API_PROXY_TARGET: http://api:8000
+      VITE_LIFEOS_API_URL: ""
+      VITE_LIFEOS_EVENTS_URL: /api/events
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  discord-gateway:
+    profiles: ["gateways"]
+    build:
+      context: .
+      dockerfile: apps/discord-gateway/Dockerfile
+    environment:
+      <<: *lifeos-env
+      LIFEOS_API_BASE_URL: ${LIFEOS_GATEWAY_API_BASE_URL:-http://api:8000}
+      DISCORD_POST_EXISTING_ON_STARTUP: ${DISCORD_POST_EXISTING_ON_STARTUP:-false}
+      LIFEOS_GATEWAY_DRY_RUN: ${LIFEOS_GATEWAY_DRY_RUN:-false}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  telegram-gateway:
+    profiles: ["gateways"]
+    build:
+      context: .
+      dockerfile: apps/telegram-gateway/Dockerfile
+    environment:
+      <<: *lifeos-env
+      LIFEOS_API_BASE_URL: ${LIFEOS_GATEWAY_API_BASE_URL:-http://api:8000}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

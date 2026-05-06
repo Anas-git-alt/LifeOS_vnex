@@ -1,0 +1,21 @@
+version: 1
+id: capture-router
+display_name: Capture Router
+domain: system
+role: intake
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - normalize Telegram, Discord, and WebUI input
+  - classify raw captures
+  - detect domains and sensitivity
+  - route captures to specialists
+not_allowed:
+  - create durable truth
+  - apply state mutations
+memory_policy:
+  raw_access: linked_only
+  durable_write: deny
+status_visibility:
+  discord: compact
+  webui: full

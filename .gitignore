@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+apps/web/*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
+
+# Secrets and local runtime
+.env
+.env.*
+!.env.example
+*.sqlite
+*.db
+*.log
+
+# Vault private/runtime content
+vault/raw/**
+vault/ledger/**
+vault/memory/private/**
+vault/system/backups/**
+vault/system/snapshots/**
+vault/system/dead-letter/**
+vault/artifacts/agent-runs/**
+
+# Keep directory sentinels
+!vault/**/.gitkeep
+!vault/README.md
+!vault/wiki/**
+!vault/state/**
+!vault/manifests/**
+!vault/memory/curated/**
+!vault/memory/review/**
+!vault/reports/**
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local scratch/failed nested clones
+master/

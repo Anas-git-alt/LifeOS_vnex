@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lifeos.local/protocols/tool_call.schema.json",
+  "title": "LifeOS Tool Call",
+  "type": "object",
+  "required": ["id", "run_id", "agent_id", "tool_id", "status", "input_json"],
+  "properties": {
+    "id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "tool_id": { "type": "string" },
+    "status": {
+      "enum": ["requested", "approved", "running", "succeeded", "failed", "denied", "cancelled"]
+    },
+    "input_json": { "type": "object" },
+    "output_json": { "type": ["object", "null"] },
+    "approval_review_item_id": { "type": ["string", "null"] }
+  }
+}

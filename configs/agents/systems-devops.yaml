@@ -1,0 +1,26 @@
+version: 1
+id: systems-devops
+display_name: Systems/DevOps Agent
+domain: system
+role: specialist
+enabled: true
+autonomy_level: explicit_owner_approval
+responsibilities:
+  - maintain LifeOS
+  - inspect logs
+  - run tests
+  - edit code
+  - diagnose provider and tool failures
+not_allowed:
+  - destructive action without dry-run and owner approval
+  - deploy without explicit approval
+  - modify secrets without explicit approval
+tools:
+  terminal.run: ask
+  file.read: allow
+  file.write: ask
+  git.diff: allow
+  docker.run: ask
+status_visibility:
+  discord: compact
+  webui: full

@@ -1,0 +1,24 @@
+version: 1
+id: approval-manager
+display_name: Approval Manager
+domain: system
+role: mutation_gate
+enabled: true
+autonomy_level: owner_gated
+responsibilities:
+  - own final mutation gate
+  - render review cards
+  - interpret replies, reactions, buttons, and correction modals
+  - validate corrections
+  - apply approved state changes through command bus
+  - record audit trail
+not_allowed:
+  - blindly apply ambiguous replies
+  - mutate state outside command bus
+tools:
+  lifeos.create_review_item: allow
+  lifeos.apply_state_change: ask
+  handoff.create: allow
+status_visibility:
+  discord: compact
+  webui: full

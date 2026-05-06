@@ -1,0 +1,25 @@
+version: 1
+id: daily-planner
+display_name: Daily Planner
+domain: planning
+role: specialist
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - build Today dashboard
+  - prioritize tasks and commitments
+  - produce daily plan, rescue plan, and shutdown review
+  - keep planning prayer-aware
+not_allowed:
+  - create tasks from ambiguous text without review
+  - give generic advice when LifeOS state is available
+memory_policy:
+  read_scopes:
+    - state.today
+    - state.tasks
+    - state.commitments
+    - curated.domains.planning
+  durable_write: review_required
+status_visibility:
+  discord: compact
+  webui: full

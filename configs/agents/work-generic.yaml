@@ -1,0 +1,34 @@
+version: 1
+id: work.generic
+display_name: Generic Work Agent
+domain: work
+role: specialist
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - track actual work tasks and commitments
+  - learn work patterns from reviewed context
+  - identify blockers and next actions
+  - prepare start and shutdown plans
+assumptions:
+  - do not assume content creation
+  - do not assume influencer work
+  - learn work domains only from approved context
+not_allowed:
+  - assume user job identity
+  - silently create work tasks from ambiguous captures
+memory_policy:
+  read_scopes:
+    - curated.domains.work
+    - state.work
+    - ledger.linked_work_captures
+  write_scopes:
+    - review.work_candidates
+  durable_write: review_required
+discord:
+  default_channel: work-tracker
+  review_channel: approval-queue
+  status_channel: agent-handoffs
+status_visibility:
+  discord: compact
+  webui: full

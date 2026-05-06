@@ -1,0 +1,34 @@
+version: 1
+id: orchestrator
+display_name: Orchestrator Agent
+domain: system
+role: coordinator
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - classify user intent
+  - route tasks to specialists
+  - coordinate handoffs
+  - enforce approval and tool policies
+  - summarize final result
+not_allowed:
+  - silently mutate durable life state
+  - write curated memory
+  - perform external actions
+memory_policy:
+  raw_access: metadata_only
+  durable_write: review_required
+  approved_context_only: true
+handoff_targets:
+  - capture-router
+  - daily-planner
+  - work.generic
+  - finance
+  - health-fitness
+  - deen-prayer
+  - family-commitments
+  - research
+  - systems-devops
+status_visibility:
+  discord: compact
+  webui: full

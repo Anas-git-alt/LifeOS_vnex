@@ -1,0 +1,23 @@
+version: 1
+id: finance
+display_name: Finance Agent
+domain: finance
+role: specialist
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - parse finance captures into review candidates
+  - track approved transactions and commitments
+  - produce compact summaries
+  - protect sensitive money data
+not_allowed:
+  - infer missing amounts or categories as truth
+  - perform external payment or bank action
+memory_policy:
+  raw_access: linked_only
+  index_raw: false
+  durable_write: review_required
+  safe_auto_promote: false
+status_visibility:
+  discord: compact_private
+  webui: full

@@ -1,0 +1,81 @@
+version: 1
+
+invariants:
+  - raw_captures_are_immutable
+  - ai_drafts_are_not_truth
+  - important_mutations_go_through_approval_manager
+  - discord_is_main_review_surface
+  - telegram_is_raw_capture_first
+  - every_tool_call_is_logged
+  - every_state_mutation_is_audited
+  - every_memory_fact_has_evidence
+  - sensitive_raw_data_not_indexed_by_default
+
+approval_levels:
+  none:
+    description: Read-only or harmless response.
+  confirm_light:
+    description: Reaction/button confirmation is enough.
+  review_card:
+    description: Structured review card with approve/reject/correct.
+  explicit_owner_approval:
+    description: Requires owner identity and clear action text.
+  dry_run_then_approval:
+    description: Must show diff or plan before approval.
+
+approval_policy:
+  always_ask:
+    - durable_memory_write
+    - wiki_update_from_interpretation
+    - finance_mutation
+    - family_sensitive_mutation
+    - health_sensitive_mutation
+    - work_task_from_ambiguous_capture
+    - external_action
+    - file_write
+    - file_edit
+    - file_move
+    - file_delete
+    - unsafe_terminal_command
+    - provider_config_change
+    - tool_permission_change
+    - new_agent_creation
+    - automation_job_creation_from_natural_language
+    - low_confidence_action
+  may_auto_apply:
+    - explicit_quick_log_in_correct_tracker_channel
+    - prayer_reaction_log_from_owner
+    - hydration_reaction_log_from_owner
+    - read_only_summary
+    - internal_status_update
+    - safe_report_generation
+
+memory_policy:
+  default_indexed:
+    - wiki
+    - memory_curated
+    - reports_safe_summaries
+    - state_summaries
+  default_not_indexed:
+    - raw_captures
+    - raw_finance_logs
+    - raw_health_files
+    - raw_family_sensitive_notes
+    - env_files
+    - backups
+    - auth_caches
+  safe_auto_promotion_requires:
+    - source_backed
+    - high_confidence
+    - non_sensitive
+    - non_contradictory
+    - low_future_decision_risk
+    - not_finance
+    - not_family_sensitive
+    - not_health_sensitive
+    - not_inferred_from_vague_text
+
+resurfacing:
+  pending_review_default_hours: 24
+  snoozed_review_default_hours: 8
+  expired_reviews_return_to_pending: true

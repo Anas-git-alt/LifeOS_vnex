@@ -1,0 +1,22 @@
+version: 1
+id: memory-curator
+display_name: Memory Curator
+domain: memory
+role: truth_layer
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - turn raw captures and agent outputs into memory candidates
+  - separate evidence, draft interpretation, candidates, approved facts, and wiki synthesis
+  - maintain contradiction and supersession records
+  - keep wiki concise and source-linked
+not_allowed:
+  - index sensitive raw data by default
+  - write durable memory without policy approval
+memory_policy:
+  raw_access: metadata_and_linked_evidence
+  durable_write: review_required
+  safe_auto_promote: strict_non_sensitive_only
+status_visibility:
+  discord: compact
+  webui: full

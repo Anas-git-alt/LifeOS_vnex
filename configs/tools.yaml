@@ -1,0 +1,161 @@
+version: 1
+
+global_tool_policy:
+  default_effect: deny
+  risk_rules:
+    safe_internal_read:
+      default_effect: allow
+    sensitive_internal_read:
+      default_effect: ask
+    external_read:
+      default_effect: ask
+    reversible_internal_write:
+      default_effect: ask
+    durable_state_mutation:
+      default_effect: ask
+    file_write_or_move:
+      default_effect: ask
+      require_backup: true
+    external_side_effect:
+      default_effect: ask
+    destructive_or_sensitive_action:
+      default_effect: ask
+      require_owner_approval: true
+      require_dry_run: true
+  never_auto_allow:
+    - file.delete
+    - external.payment
+    - provider_keys.modify
+    - tool_permissions.modify
+    - deploy.production
+    - memory.index_raw_sensitive
+
+tools:
+  lifeos.read_state:
+    display_name: Read LifeOS state
+    category: lifeos
+    risk_level: safe_internal_read
+  lifeos.create_review_item:
+    display_name: Create review item
+    category: lifeos
+    risk_level: reversible_internal_write
+  lifeos.apply_state_change:
+    display_name: Apply approved state change
+    category: lifeos
+    risk_level: durable_state_mutation
+  lifeos.search_memory:
+    display_name: Search approved memory
+    category: memory
+    risk_level: sensitive_internal_read
+  lifeos.write_memory_candidate:
+    display_name: Write memory candidate
+    category: memory
+    risk_level: reversible_internal_write
+  lifeos.write_curated_memory:
+    display_name: Write curated memory
+    category: memory
+    risk_level: durable_state_mutation
+  handoff.create:
+    display_name: Create agent handoff
+    category: orchestration
+    risk_level: reversible_internal_write
+  file.read:
+    display_name: Read file
+    category: filesystem
+    risk_level: sensitive_internal_read
+  file.write:
+    display_name: Write file
+    category: filesystem
+    risk_level: file_write_or_move
+    requires_backup: true
+  terminal.run:
+    display_name: Run terminal command
+    category: system
+    risk_level: destructive_or_sensitive_action
+    sandbox_required: true
+  web.search:
+    display_name: Web search
+    category: external
+    risk_level: external_read
+  web.fetch:
+    display_name: Web fetch
+    category: external
+    risk_level: external_read
+
+agent_permissions:
+  orchestrator:
+    lifeos.read_state:
+      effect: allow
+    lifeos.search_memory:
+      effect: allow
+    handoff.create:
+      effect: allow
+    lifeos.create_review_item:
+      effect: allow
+    file.read:
+      effect: deny
+    file.write:
+      effect: deny
+    terminal.run:
+      effect: deny
+
+  work.generic:
+    lifeos.read_state:
+      effect: allow
+    lifeos.search_memory:
+      effect: allow
+    lifeos.create_review_item:
+      effect: allow
+    handoff.create:
+      effect: allow
+    file.read:
+      effect: ask
+    file.write:
+      effect: ask
+    terminal.run:
+      effect: deny
+
+  finance:
+    lifeos.read_state:
+      effect: allow
+    lifeos.create_review_item:
+      effect: allow
+    lifeos.apply_state_change:
+      effect: ask
+    lifeos.search_memory:
+      effect: allow
+    web.search:
+      effect: deny
+    file.read:
+      effect: deny
+    terminal.run:
+      effect: deny
+
+  systems-devops:
+    file.read:
+      effect: allow
+      scopes:
+        paths:
+          - /workspace/lifeos-vnext
+    file.write:
+      effect: ask
+      scopes:
+        paths:
+          - /workspace/lifeos-vnext
+      require_diff: true
+      require_backup: true
+    terminal.run:
+      effect: ask
+      sandbox: docker
+      allowed_commands:
+        - pytest
+        - npm test
+        - ruff
+        - mypy
+        - git diff
+      blocked_patterns:
+        - "rm -rf /"
+        - "curl .* | sh"
+        - sudo
+    provider_keys.modify:
+      effect: deny

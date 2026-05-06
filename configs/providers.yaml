@@ -1,0 +1,144 @@
+version: 1
+
+providers:
+  openrouter:
+    type: openai_compatible
+    display_name: OpenRouter
+    base_url: "https://openrouter.ai/api/v1"
+    enabled: true
+    auth:
+      type: api_key_pool
+      keys:
+        - env: OPENROUTER_API_KEY_1
+          label: primary
+          priority: 10
+          monthly_budget_usd: 20
+        - env: OPENROUTER_API_KEY_2
+          label: backup
+          priority: 20
+          monthly_budget_usd: 10
+    request_defaults:
+      timeout_seconds: 90
+      retries: 1
+      headers:
+        HTTP-Referer: "https://lifeos.local"
+        X-Title: "LifeOS vNext"
+    provider_fallback:
+      enabled: true
+    model_fallback:
+      enabled: true
+      use_openrouter_models_array: true
+
+  nvidia_nim:
+    type: openai_compatible
+    display_name: NVIDIA NIM
+    base_url: "https://integrate.api.nvidia.com/v1"
+    enabled: true
+    auth:
+      type: api_key_pool
+      keys:
+        - env: NVIDIA_NIM_API_KEY_1
+          label: primary
+          priority: 10
+        - env: NVIDIA_NIM_API_KEY_2
+          label: backup
+          priority: 20
+    health:
+      enabled: true
+      ready_endpoint: "/v1/health/ready"
+      models_endpoint: "/v1/models"
+    request_defaults:
+      timeout_seconds: 90
+      retries: 1
+
+  codex_oauth:
+    type: codex_cli
+    display_name: OpenAI Codex OAuth
+    enabled: true
+    use_for:
+      - coding
+      - repo_edits
+      - tests
+      - systems_devops
+    auth:
+      type: chatgpt_oauth_cache
+      codex_home_env: CODEX_HOME
+      credentials_store: keyring
+      fallback_credentials_store: file
+    execution:
+      mode: sandboxed_cli
+      command: "codex exec"
+      require_workspace_scope: true
+      require_approval_for:
+        - file_write
+        - terminal_command
+        - git_commit
+        - deploy
+
+circuit_breakers:
+  provider_error_rate_window_minutes: 10
+  open_after_failures: 5
+  half_open_after_seconds: 120
+  key_cooldown_on_429_seconds: 300
+  key_disable_on_auth_failure: true
+
+agent_models:
+  orchestrator:
+    primary:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      reasoning_effort: medium
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    max_cost_usd_per_run: 0.25
+    fallback_allowed: true
+
+  capture-router:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    max_cost_usd_per_run: 0.05
+    fallback_allowed: true
+
+  approval-manager:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    temperature: 0
+    fallback_allowed: true
+
+  memory-curator:
+    primary:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      reasoning_effort: medium
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  daily-planner:
+    primary:
+      provider: openrouter
+      model: openai/gpt-5.2-mini
+    secondary:
+      provider: nvidia_nim
+      model: nvidia/nemotron-3-super-120b-a12b
+    fallback_allowed: true
+
+  systems-devops:
+    primary:
+      provider: codex_oauth
+      model: codex-default
+    secondary:
+      provider: openrouter
+      model: openai/gpt-5.2
+    fallback_allowed: true
+    require_workspace_scope: true

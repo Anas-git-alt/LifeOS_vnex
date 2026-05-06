@@ -1,0 +1,183 @@
+version: 1
+
+server:
+  name: LIFEOS HOME
+  owner_env: DISCORD_OWNER_USER_ID
+  guild_env: DISCORD_GUILD_ID
+
+permission_model:
+  private_by_default: true
+  allow_owner_env: DISCORD_OWNER_USER_ID
+  allow_bot: true
+  notes:
+    - Deny @everyone view access for LifeOS channels.
+    - Allow owner and bot to view/send/read history.
+    - Setup script creates missing channels only; it does not delete channels.
+
+categories:
+  command_center:
+    name: COMMAND CENTER
+    position: 10
+    purpose: daily control, capture, approvals, and briefings
+  trackers:
+    name: TRACKERS
+    position: 20
+    purpose: domain trackers and sensitive logs
+  agents:
+    name: AGENTS
+    position: 30
+    purpose: agent runs, handoffs, memory, research
+  operations:
+    name: OPERATIONS
+    position: 40
+    purpose: system notices, audit, testing, dead letters
+
+channels:
+  dashboard:
+    name: dashboard
+    purpose: dashboard
+    category: command_center
+    env: DISCORD_DASHBOARD_CHANNEL_ID
+    private: true
+    topic: Daily command center. High-level status, links, and summaries only.
+  daily_plan:
+    name: daily-plan
+    purpose: daily_plan
+    category: command_center
+    env: DISCORD_DAILY_PLAN_CHANNEL_ID
+    private: true
+    topic: Morning plan, shutdown plan, and day-level adjustments.
+  approval_queue:
+    name: approval-queue
+    purpose: approval_queue
+    category: command_center
+    env: DISCORD_APPROVAL_CHANNEL_ID
+    private: true
+    review_cards: true
+    topic: Review cards only. Approve, reject, correct, clarify, snooze.
+  quick_capture:
+    name: quick-capture
+    purpose: raw_capture
+    category: command_center
+    env: DISCORD_QUICK_CAPTURE_CHANNEL_ID
+    private: true
+    topic: Fast owner capture. Bot routes raw messages into LifeOS.
+  bot_testing:
+    name: bot-testing
+    purpose: sandbox
+    category: command_center
+    env: DISCORD_BOT_TESTING_CHANNEL_ID
+    private: true
+    topic: Safe Discord bot tests. Test messages may be deleted after send.
+
+  work_tracker:
+    name: work-tracker
+    purpose: work
+    category: trackers
+    env: DISCORD_WORK_TRACKER_CHANNEL_ID
+    private: true
+    topic: Work commitments, blockers, next actions, and reviewed work state.
+  finance_tracker:
+    name: finance-tracker
+    purpose: finance
+    category: trackers
+    env: DISCORD_FINANCE_TRACKER_CHANNEL_ID
+    private: true
+    sensitivity: finance
+    topic: Finance review and approved finance summaries. No raw secrets.
+  prayer_tracker:
+    name: prayer-tracker
+    purpose: prayer
+    category: trackers
+    env: DISCORD_PRAYER_TRACKER_CHANNEL_ID
+    private: true
+    topic: Prayer tracker, quick logs, and summaries.
+  habits_health:
+    name: habits-health
+    purpose: health
+    category: trackers
+    env: DISCORD_HABITS_HEALTH_CHANNEL_ID
+    private: true
+    sensitivity: health
+    topic: Habits and health-sensitive review. Keep private.
+  family_commitments:
+    name: family-commitments
+    purpose: family
+    category: trackers
+    env: DISCORD_FAMILY_COMMITMENTS_CHANNEL_ID
+    private: true
+    sensitivity: family
+    topic: Family commitments and private reminders.
+
+  agent_handoffs:
+    name: agent-handoffs
+    purpose: handoff_trace
+    category: agents
+    env: DISCORD_AGENT_HANDOFFS_CHANNEL_ID
+    private: true
+    topic: Compact agent handoff trace. Full detail stays in WebUI.
+  agent_runs:
+    name: agent-runs
+    purpose: run_trace
+    category: agents
+    env: DISCORD_AGENT_RUNS_CHANNEL_ID
+    private: true
+    topic: Agent run lifecycle summaries and user-facing failures.
+  memory_review:
+    name: memory-review
+    purpose: memory_review
+    category: agents
+    env: DISCORD_MEMORY_REVIEW_CHANNEL_ID
+    private: true
+    topic: Candidate memory review before curated memory writes.
+  research_lab:
+    name: research-lab
+    purpose: research
+    category: agents
+    env: DISCORD_RESEARCH_LAB_CHANNEL_ID
+    private: true
+    topic: Research findings and source-backed drafts.
+
+  system_notifications:
+    name: system-notifications
+    purpose: system_notifications
+    category: operations
+    env: DISCORD_SYSTEM_NOTIFICATIONS_CHANNEL_ID
+    private: true
+    topic: System notices, automation summaries, warnings.
+  audit_log:
+    name: audit-log
+    purpose: audit_log
+    category: operations
+    env: DISCORD_AUDIT_LOG_CHANNEL_ID
+    private: true
+    topic: Human-readable audit summaries. Database remains source of truth.
+  dead_letter:
+    name: dead-letter
+    purpose: dead_letter
+    category: operations
+    env: DISCORD_DEAD_LETTER_CHANNEL_ID
+    private: true
+    topic: Failed delivery, rejected automation, and items needing repair.
+
+review_card_buttons:
+  - approve
+  - correct
+  - clarify
+  - snooze
+  - reject
+
+visibility_policy:
+  discord_show:
+    - user_facing_status
+    - review_needed
+    - approval_result
+    - user_affecting_failure
+    - automation_summary
+    - high_risk_action
+  webui_only:
+    - token_counts
+    - full_prompts
+    - raw_tool_payloads
+    - stack_traces
+    - verbose_retry_logs

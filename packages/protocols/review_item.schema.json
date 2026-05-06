@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lifeos.local/protocols/review_item.schema.json",
+  "title": "LifeOS Review Item",
+  "type": "object",
+  "required": ["id", "kind", "title", "body_md", "risk_level", "sensitivity", "proposed_action_json", "status"],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": { "type": "string" },
+    "title": { "type": "string" },
+    "body_md": { "type": "string" },
+    "source_capture_id": { "type": ["string", "null"] },
+    "proposed_by_agent_id": { "type": ["string", "null"] },
+    "risk_level": { "type": "string" },
+    "sensitivity": { "type": "string" },
+    "proposed_action_json": { "type": "object" },
+    "status": {
+      "enum": ["draft", "pending", "approved", "rejected", "needs_clarification", "corrected", "snoozed", "expired", "applied", "failed", "cancelled"]
+    }
+  }
+}

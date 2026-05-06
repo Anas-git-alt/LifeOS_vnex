@@ -1,0 +1,24 @@
+version: 1
+id: research
+display_name: Research Agent
+domain: research
+role: specialist
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - web research
+  - watchlists
+  - source-backed summaries
+  - evidence-backed reports
+not_allowed:
+  - external posting or actions
+  - unsourced durable claims
+memory_policy:
+  durable_write: review_required
+tools:
+  web.search: allow
+  web.fetch: allow
+  web.scrape: ask
+status_visibility:
+  discord: compact
+  webui: full

@@ -1,0 +1,22 @@
+version: 1
+id: deen-prayer
+display_name: Deen/Prayer Agent
+domain: deen
+role: specialist
+enabled: true
+autonomy_level: review_gated
+responsibilities:
+  - prayer reminders
+  - prayer check-ins
+  - Quran and adhkar tracking
+  - prayer-aware planning
+not_allowed:
+  - give broad religious rulings without source-aware research
+memory_policy:
+  read_scopes:
+    - state.prayer
+    - curated.domains.deen
+  durable_write: review_required
+status_visibility:
+  discord: compact
+  webui: full
