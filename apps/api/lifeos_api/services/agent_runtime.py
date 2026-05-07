@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -27,8 +28,22 @@ from lifeos_api.db.models import (
 from lifeos_api.services.agentic_router import _provider_config_from_runtime
 from lifeos_api.services.audit import create_audit_event
 from lifeos_api.services.command_bus import CommandBus, CommandRequest
+from lifeos_api.services.conversation_action_planner import (
+    STRICT_JSON_INSTRUCTIONS,
+    interpret_proposal_follow_up,
+    plan_conversation_turn,
+)
+from lifeos_api.services.conversation_action_service import (
+    create_formal_reviews_for_plan,
+    execute_action_proposal,
+    open_pending_action_proposals,
+    persist_inline_proposals,
+    proposal_to_public_dict,
+    reject_action_proposal,
+    revise_action_proposal,
+)
 from lifeos_api.services.policy_engine import decide_capture_action
-from lifeos_api.services.runtime_config import get_agent_autonomy, get_router_mode
+from lifeos_api.services.runtime_config import get_agent_autonomy, get_agent_model_map, get_router_mode
 from lifeos_api.services.status_events import create_status_event
 from lifeos_core.ids import new_id
 from lifeos_core.time import utc_now
@@ -163,6 +178,18 @@ async def run_agent_message(
     if not await _start_iteration(session, run, "Understand request"):
         return await _finish_max_iterations(session, agent_session, run, user_message)
 
+    conversation_result = await _try_conversation_action_loop(
+        session=session,
+        settings=settings,
+        run=run,
+        agent_session=agent_session,
+        user_message=user_message,
+        message_md=message_md,
+        source_platform=source_platform,
+    )
+    if conversation_result is not None:
+        return await _finish_run(session, agent_session, run, user_message, conversation_result)
+
     plan = await _build_plan(
         session=session,
         settings=settings,
@@ -274,6 +301,502 @@ async def _start_iteration(session: AsyncSession, run: AgentRun, title: str) -> 
         detail_json={"iteration": run.current_iteration, "iteration_cap": run.iteration_cap},
     )
     return True
+
+
+async def _try_conversation_action_loop(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    run: AgentRun,
+    agent_session: AgentSession,
+    user_message: Message,
+    message_md: str,
+    source_platform: str,
+) -> dict[str, Any] | None:
+    pending = await open_pending_action_proposals(session, session_id=agent_session.id)
+    follow_up = interpret_proposal_follow_up(
+        message_md,
+        [proposal_to_public_dict(row) for row in pending],
+        timezone=settings.timezone,
+    )
+    if follow_up.kind != "none":
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type="proposal.follow_up_detected",
+            title=f"Proposal follow-up: {follow_up.kind}",
+            visibility="discord_compact",
+            detail_json={"proposal_indexes": follow_up.proposal_indexes},
+        )
+        return await _handle_proposal_follow_up(
+            session=session,
+            settings=settings,
+            run=run,
+            pending=pending,
+            follow_up=follow_up,
+            message_md=message_md,
+        )
+
+    if _is_model_identity_question(message_md):
+        return _result(
+            status="final",
+            final_message_md=await _model_identity_reply(session, agent_session.agent_id or "orchestrator"),
+            what_i_did_md="- Answered from runtime provider configuration.",
+            status_summary="Answered model identity",
+            action_plan={"mode": "answer_only", "source": "runtime_config"},
+        )
+
+    llm_plan_json = None
+    if not _use_local_conversation_planner_first(message_md):
+        llm_plan_json = await _conversation_plan_json_with_provider(
+            session=session,
+            settings=settings,
+            run=run,
+            agent_session=agent_session,
+            message_md=message_md,
+            source_platform=source_platform,
+        )
+    plan = await plan_conversation_turn(
+        agent_name=agent_session.agent_id or "orchestrator",
+        user_message=message_md,
+        session_id=agent_session.id,
+        source=source_platform,
+        recent_context=[],
+        state_packet=None,
+        timezone=settings.timezone,
+        llm_plan_json=llm_plan_json,
+    )
+    for event_name in plan.status_events:
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type=f"conversation.{event_name}",
+            title=event_name.replace("_", " ").title(),
+            visibility="discord_compact" if event_name in {"planned_action", "waiting_for_confirmation"} else "web_only",
+            detail_json={"mode": plan.mode},
+        )
+
+    if plan.mode == "answer_only":
+        return _result(
+            status="final",
+            final_message_md=_answer_only_reply(plan.assistant_reply, message_md),
+            what_i_did_md="- Answered without mutating LifeOS state.",
+            status_summary="Answered without state change",
+            action_plan={"mode": plan.mode},
+        )
+
+    if plan.mode == "clarify":
+        return _result(
+            status="needs_clarification",
+            final_message_md=_clarify_reply(plan.assistant_reply),
+            what_i_did_md="- Asked for clarification before acting.",
+            clarifying_questions=[plan.clarifying_question] if plan.clarifying_question else [],
+            status_summary="Needs clarification",
+            action_plan=plan.model_dump(mode="json"),
+        )
+
+    if plan.mode == "execute_now":
+        rows = await persist_inline_proposals(
+            session,
+            plan=plan,
+            agent_session=agent_session,
+            user_message=user_message,
+            source=source_platform,
+        )
+        actions: list[dict[str, Any]] = []
+        audit_refs: list[str] = []
+        for row in rows:
+            try:
+                result = await execute_action_proposal(
+                    session,
+                    settings,
+                    row,
+                    actor_type="agent",
+                    actor_id=agent_session.agent_id or "orchestrator",
+                )
+            except ValueError as exc:
+                await reject_action_proposal(session, row)
+                return _result(
+                    status="needs_clarification",
+                    final_message_md=f"I could not complete that safely: {exc}",
+                    what_i_did_md="- Stopped before changing state because the action target was unclear.",
+                    clarifying_questions=[str(exc)],
+                    action_proposals=[proposal_to_public_dict(row)],
+                    action_plan=plan.model_dump(mode="json"),
+                    status_summary="Action target unclear",
+                )
+            actions.append(
+                {
+                    "proposal_id": row.id,
+                    "command_type": result.command_type,
+                    "state_change_id": result.state_change_id,
+                    "entity_type": result.entity_type,
+                    "entity_id": result.entity_id,
+                    "status": _command_status_value(result.status),
+                }
+            )
+            if result.audit_event_id:
+                audit_refs.append(result.audit_event_id)
+            if _command_status_value(result.status) != "applied":
+                return _result(
+                    status="failed",
+                    final_message_md="I tried to do that, but the command bus rejected the state change. I did not create anything.",
+                    what_i_did_md="- Attempted the explicit low-risk command through the command bus.\n- The command failed safely.",
+                    autonomous_actions=actions,
+                    audit_refs=audit_refs,
+                    action_proposals=[proposal_to_public_dict(row) for row in rows],
+                    action_plan=plan.model_dump(mode="json"),
+                    status_summary="Command failed safely",
+                )
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type="conversation.action_completed",
+            title="Conversation action completed",
+            visibility="discord_compact",
+            detail_json={"actions": actions},
+        )
+        return _result(
+            status="final",
+            final_message_md=_executed_reply(rows, actions),
+            what_i_did_md="- Executed explicit low-risk command through the command bus.",
+            autonomous_actions=actions,
+            audit_refs=audit_refs,
+            action_proposals=[proposal_to_public_dict(row) for row in rows],
+            action_plan=plan.model_dump(mode="json"),
+            status_summary="Executed explicit low-risk action",
+        )
+
+    if plan.mode == "propose_inline":
+        rows = await persist_inline_proposals(
+            session,
+            plan=plan,
+            agent_session=agent_session,
+            user_message=user_message,
+            source=source_platform,
+        )
+        return _result(
+            status="waiting_confirmation",
+            final_message_md=_inline_proposal_reply(rows),
+            what_i_did_md="- Created pending inline proposal(s).",
+            action_proposals=[proposal_to_public_dict(row) for row in rows],
+            action_plan=plan.model_dump(mode="json"),
+            status_summary="Waiting for inline confirmation",
+        )
+
+    if plan.mode == "formal_review":
+        reviews = await create_formal_reviews_for_plan(
+            session,
+            run=run,
+            plan=plan,
+            source_message=user_message,
+        )
+        review_ids = [review.id for review in reviews]
+        return _result(
+            status="needs_approval",
+            final_message_md=_formal_review_reply(plan.proposals, review_ids),
+            what_i_did_md="- Created formal review item(s) and did not execute the action.",
+            review_item_id=review_ids[0] if review_ids else None,
+            review_item_ids=review_ids,
+            action_plan=plan.model_dump(mode="json"),
+            status_summary="Formal review required",
+        )
+
+    return None
+
+
+async def _handle_proposal_follow_up(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    run: AgentRun,
+    pending: list[Any],
+    follow_up: Any,
+    message_md: str,
+) -> dict[str, Any]:
+    selected = _selected_proposals(pending, follow_up.proposal_indexes)
+    if not selected:
+        return _result(
+            status="needs_clarification",
+            final_message_md="I do not see an open proposal to edit or approve here. Tell me the action again and I will stage it cleanly.",
+            what_i_did_md="- Asked for clarification before acting on a proposal.",
+            clarifying_questions=["Which proposal should I use?"],
+            status_summary="Proposal reference unclear",
+        )
+
+    if follow_up.kind == "ask":
+        return _result(
+            status="final",
+            final_message_md=_proposal_details(selected),
+            what_i_did_md="- Explained the pending proposal without changing state.",
+            action_proposals=[proposal_to_public_dict(row) for row in selected],
+            status_summary="Explained pending proposal",
+        )
+
+    if follow_up.kind == "reject":
+        for row in selected:
+            await reject_action_proposal(session, row)
+        return _result(
+            status="final",
+            final_message_md=_reject_reply(selected),
+            what_i_did_md="- Rejected the pending proposal.",
+            action_proposals=[proposal_to_public_dict(row) for row in selected],
+            status_summary="Proposal rejected",
+        )
+
+    if follow_up.kind == "revise":
+        revised = []
+        for row in selected:
+            revised.append(
+                await revise_action_proposal(
+                    session,
+                    row,
+                    revision_text=follow_up.revision_text or message_md,
+                    timezone=settings.timezone,
+                )
+            )
+        return _result(
+            status="waiting_confirmation",
+            final_message_md=_revision_reply(revised),
+            what_i_did_md="- Revised the pending proposal without executing it.",
+            action_proposals=[proposal_to_public_dict(row) for row in revised],
+            status_summary="Proposal revised",
+        )
+
+    if follow_up.kind == "approve":
+        if "only" in message_md.lower():
+            selected_ids = {row.id for row in selected}
+            for row in pending:
+                if row.id not in selected_ids:
+                    await reject_action_proposal(session, row)
+        actions: list[dict[str, Any]] = []
+        audit_refs: list[str] = []
+        for row in selected:
+            try:
+                result = await execute_action_proposal(
+                    session,
+                    settings,
+                    row,
+                    actor_type="user",
+                    actor_id="owner",
+                )
+            except ValueError as exc:
+                await reject_action_proposal(session, row)
+                return _result(
+                    status="needs_clarification",
+                    final_message_md=f"I could not complete that safely: {exc}",
+                    what_i_did_md="- Stopped before changing state because the action target was unclear.",
+                    clarifying_questions=[str(exc)],
+                    action_proposals=[proposal_to_public_dict(row) for row in selected],
+                    status_summary="Action target unclear",
+                )
+            actions.append(
+                {
+                    "proposal_id": row.id,
+                    "command_type": result.command_type,
+                    "state_change_id": result.state_change_id,
+                    "entity_type": result.entity_type,
+                    "entity_id": result.entity_id,
+                    "status": _command_status_value(result.status),
+                }
+            )
+            if result.audit_event_id:
+                audit_refs.append(result.audit_event_id)
+            if _command_status_value(result.status) != "applied":
+                return _result(
+                    status="failed",
+                    final_message_md="I tried to create it, but the command bus rejected the state change. I did not create anything.",
+                    what_i_did_md="- Attempted the approved inline proposal through the command bus.\n- The command failed safely.",
+                    autonomous_actions=actions,
+                    action_proposals=[proposal_to_public_dict(row) for row in selected],
+                    audit_refs=audit_refs,
+                    status_summary="Command failed safely",
+                )
+        return _result(
+            status="final",
+            final_message_md=_approved_reply(selected, actions),
+            what_i_did_md="- Executed approved inline proposal(s) through the command bus.",
+            autonomous_actions=actions,
+            action_proposals=[proposal_to_public_dict(row) for row in selected],
+            audit_refs=audit_refs,
+            status_summary="Approved proposal executed",
+        )
+
+    return _result(
+        status="needs_clarification",
+        final_message_md="I am not sure whether you want me to create, edit, or ignore the pending proposal.",
+        what_i_did_md="- Asked for clarification before acting.",
+        clarifying_questions=["Should I create, edit, or ignore it?"],
+        status_summary="Proposal follow-up unclear",
+    )
+
+
+async def _conversation_plan_json_with_provider(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    run: AgentRun,
+    agent_session: AgentSession,
+    message_md: str,
+    source_platform: str,
+) -> str | None:
+    mode = await get_router_mode(session, settings.router_mode)
+    if mode == "deterministic":
+        return None
+    log_id = new_id("pcall")
+    await create_status_event(
+        session,
+        run_id=run.id,
+        event_type="provider.call_started",
+        title="Conversation planner provider started",
+        visibility="web_only",
+        detail_json={"agent_id": "orchestrator", "planner": "conversation_action_loop"},
+    )
+    try:
+        config = await _provider_config_from_runtime(session)
+        completion = ProviderRouter(config=config).complete_json(
+            "orchestrator",
+            _conversation_planning_messages(
+                agent_session=agent_session,
+                message_md=message_md,
+                source_platform=source_platform,
+                timezone=settings.timezone,
+            ),
+        )
+        session.add(_provider_log(log_id, run.id, "orchestrator", completion, "succeeded"))
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type="provider.call_finished",
+            title="Conversation planner provider finished",
+            visibility="web_only",
+            detail_json={"provider_call_log_id": log_id, "provider": completion.provider, "model": completion.model},
+        )
+        return completion.content
+    except Exception as exc:  # noqa: BLE001 - chat can fall back outside agentic mode
+        session.add(
+            ProviderCallLog(
+                id=log_id,
+                run_id=run.id,
+                agent_id="orchestrator",
+                provider_id="unavailable",
+                model="conversation-action-planner",
+                key_label=None,
+                status="failed",
+                latency_ms=0,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0,
+                error_json={"type": type(exc).__name__, "message": str(exc)[:1000]},
+                created_at=utc_now(),
+            )
+        )
+        await create_status_event(
+            session,
+            run_id=run.id,
+            event_type="provider.fallback_used",
+            title="Conversation planner provider unavailable",
+            visibility="discord_compact",
+            detail_json={"error": str(exc)[:500], "mode": mode},
+        )
+        if mode == "agentic":
+            return json.dumps(
+                {
+                    "mode": "clarify",
+                    "assistant_reply": "Provider planning is required but unavailable. Check provider settings.",
+                    "proposals": [],
+                    "memory_candidates": [],
+                    "clarifying_question": "Should I retry after provider settings are fixed?",
+                    "status_events": ["understanding_request"],
+                }
+            )
+        return None
+
+
+def _use_local_conversation_planner_first(message_md: str) -> bool:
+    lower = " ".join(message_md.strip().lower().split())
+    if not lower:
+        return True
+    if re.fullmatch(r"test\s*\d*", lower):
+        return True
+    if _is_model_identity_question(message_md):
+        return True
+    action_markers = [
+        "create a task",
+        "add a task",
+        "make a task",
+        "remind me",
+        "set a reminder",
+        "create a reminder",
+        "mark ",
+        "complete ",
+        "finish ",
+        "i need to",
+        "need to",
+        "i should",
+        "should ",
+        "i prefer",
+        "remember that",
+        "remember this",
+        "every ",
+        "daily",
+        "weekly",
+        "monthly",
+        "delete",
+        "run docker",
+        "terminal",
+        "write file",
+        "edit file",
+        "provider",
+        "api key",
+    ]
+    return any(marker in lower for marker in action_markers)
+
+
+def _is_model_identity_question(message_md: str) -> bool:
+    lower = " ".join(message_md.strip().lower().split())
+    return (
+        "what model" in lower
+        or "which model" in lower
+        or "what provider" in lower
+        or "which provider" in lower
+        or "who are you using" in lower
+    )
+
+
+async def _model_identity_reply(session: AsyncSession, agent_id: str) -> str:
+    models = await get_agent_model_map(session)
+    config = models.get(agent_id) or models.get("orchestrator") or {}
+    primary = config.get("primary", {}) if isinstance(config, dict) else {}
+    secondary = config.get("secondary", {}) if isinstance(config, dict) else {}
+    primary_text = _provider_model_text(primary)
+    secondary_text = _provider_model_text(secondary)
+    if secondary_text:
+        return (
+            f"I am LifeOS's `{agent_id}` session, routed through `{primary_text}` with fallback `{secondary_text}`. "
+            "Provider calls are logged on each run; `/lifeos providers` shows the live config."
+        )
+    if primary_text:
+        return (
+            f"I am LifeOS's `{agent_id}` session, routed through `{primary_text}`. "
+            "Provider calls are logged on each run; `/lifeos providers` shows the live config."
+        )
+    return (
+        f"I am LifeOS's `{agent_id}` session. I do not see a configured model route in the DB right now; "
+        "`/lifeos providers` will show the current provider state."
+    )
+
+
+def _provider_model_text(raw: object) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    provider = raw.get("provider")
+    model = raw.get("model")
+    if provider and model:
+        return f"{provider}/{model}"
+    if provider:
+        return str(provider)
+    return ""
 
 
 async def _build_plan(
@@ -436,6 +959,52 @@ def _planning_messages(
             "final_message_md": "for direct only",
             "clarifying_questions": [],
             "proposed_action": {"command_type": "life_item.create", "risk_level": "reversible_internal_write", "payload": {}},
+        },
+    }
+    return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload)}]
+
+
+def _conversation_planning_messages(
+    *,
+    agent_session: AgentSession,
+    message_md: str,
+    source_platform: str,
+    timezone: str,
+) -> list[dict[str, str]]:
+    system = (
+        "You are LifeOS Conversation Action Planner. "
+        f"{STRICT_JSON_INSTRUCTIONS} "
+        "Never claim a durable mutation happened. The API will execute or review after validation."
+    )
+    payload = {
+        "source_platform": source_platform,
+        "active_agent_id": agent_session.agent_id,
+        "session_title": agent_session.title,
+        "timezone": timezone,
+        "message": message_md,
+        "schema": {
+            "mode": "answer_only|execute_now|propose_inline|formal_review|clarify",
+            "assistant_reply": "Discord-friendly reply",
+            "proposals": [
+                {
+                    "type": "task.create|task.update|task.complete|reminder.create|job.create_once|job.create_recurring|daily_log.create|memory_candidate.create|research.start|file.read|file.write_proposal|terminal.run_proposal|agent.handoff",
+                    "summary": "short action summary",
+                    "confidence": 0.0,
+                    "risk": "low|medium|high|sensitive|destructive",
+                    "requires_confirmation": True,
+                    "formal_review_required": True,
+                    "draft": {
+                        "explicit": False,
+                        "proposal_type": "same as type",
+                        "source_text": "original message",
+                        "command": {"command_type": "life_item.create", "payload": {}},
+                    },
+                    "reason": "policy reason",
+                }
+            ],
+            "memory_candidates": [],
+            "clarifying_question": None,
+            "status_events": ["received_input", "understanding_request"],
         },
     }
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload)}]
@@ -996,16 +1565,187 @@ async def _finish_run(
     }
 
 
+def _selected_proposals(pending: list[Any], indexes: list[int]) -> list[Any]:
+    if not pending:
+        return []
+    if not indexes:
+        return [pending[-1]]
+    selected: list[Any] = []
+    for index in indexes:
+        if 0 <= index < len(pending):
+            selected.append(pending[index])
+    return selected
+
+
+def _inline_proposal_reply(rows: list[Any]) -> str:
+    if not rows:
+        return "I can stage that for you, but I need one more detail before I do."
+    first = rows[0]
+    payload = _proposal_payload(first)
+    title = _proposal_title(first)
+    due = _friendly_due(payload)
+    lines = [
+        f"I read that as something you might want tracked, so I staged it: **{title}**.",
+    ]
+    if due:
+        lines.append(f"Timing I have: {due}.")
+    lines.extend(
+        [
+            "",
+            "Create adds it, Edit lets you adjust the wording or timing, and Ignore drops it.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _proposal_details(rows: list[Any]) -> str:
+    lines = ["Here is the exact change I have staged:"]
+    for index, row in enumerate(rows, start=1):
+        payload = _proposal_payload(row)
+        title = _proposal_title(row)
+        lines.append(f"{index}. {title}")
+        due = _friendly_due(payload)
+        if due:
+            lines.append(f"   Timing: {due}")
+        command = (row.draft_json or {}).get("command", {})
+        if isinstance(command, dict) and command.get("command_type"):
+            lines.append(f"   Path: `{command['command_type']}` through the audited command bus")
+    lines.append("")
+    lines.append("Nothing changes until you say yes or press Create.")
+    return "\n".join(lines)
+
+
+def _executed_reply(rows: list[Any], actions: list[dict[str, Any]]) -> str:
+    return _approved_reply(rows, actions)
+
+
+def _approved_reply(rows: list[Any], actions: list[dict[str, Any]]) -> str:
+    if not actions:
+        return "Done."
+    first = actions[0]
+    payload = _proposal_payload(rows[0]) if rows else {}
+    title = _proposal_title(rows[0]) if rows else None
+    due = _friendly_due(payload)
+    if first.get("command_type") == "life_item.create":
+        if due and title:
+            return f"Done. I added **{title}** for {due}."
+        if title:
+            return f"Done. I added **{title}**."
+        return "Done. Task created."
+    if first.get("command_type") == "life_item.update":
+        proposal_type = getattr(rows[0], "proposal_type", "") if rows else ""
+        if proposal_type == "task.complete" and title:
+            return f"Done. Marked **{title}** complete."
+        if title:
+            return f"Done. I updated **{title}**."
+        return "Done. Task updated."
+    if first.get("command_type") == "job.create":
+        if due and title:
+            return f"Done. I set **{title}** for {due}."
+        if title:
+            return f"Done. Reminder created: **{title}**."
+        return "Done. Reminder created."
+    return "Done."
+
+
+def _revision_reply(rows: list[Any]) -> str:
+    if not rows:
+        return "I updated the proposal. Say yes when it looks right."
+    payload = _proposal_payload(rows[0])
+    title = _proposal_title(rows[0])
+    due = _friendly_due(payload)
+    if due:
+        return f"Updated. I now have **{title}** set for {due}. Say yes or press Create when that is right."
+    return f"Updated. The staged item is now **{title}**. Say yes or press Create when that is right."
+
+
+def _reject_reply(rows: list[Any]) -> str:
+    if not rows:
+        return "Ignored. I did not create anything."
+    title = _proposal_title(rows[0])
+    return f"Ignored **{title}**. I did not create anything."
+
+
+def _formal_review_reply(proposals: list[Any], review_ids: list[str]) -> str:
+    first = proposals[0] if proposals else None
+    if first is None:
+        return "I sent this to formal review before doing anything."
+    if first.type == "memory_candidate.create":
+        lead = "I can remember that preference, but I will not write memory from a chat line without approval."
+    elif first.type == "job.create_recurring":
+        lead = "That is a recurring automation, so I paused before activating it."
+    elif first.risk == "destructive":
+        lead = "That could be destructive, so I stopped before touching anything."
+    else:
+        lead = "This crosses the review line, so I paused before acting."
+    refs = ", ".join(f"`{review_id}`" for review_id in review_ids)
+    return f"{lead}\n\nI created review {refs}."
+
+
+def _answer_only_reply(reply: str, message_md: str) -> str:
+    lower = message_md.strip().lower()
+    if re.fullmatch(r"test\s*\d*", lower):
+        return f"I see `{message_md.strip()}`. Test ping received; I did not change anything."
+    return reply
+
+
+def _clarify_reply(reply: str) -> str:
+    if "could not validate" in reply.lower():
+        return "I am not confident enough to act on that as-is. Tell me the action in one sentence and I will stage it safely."
+    return reply
+
+
+def _proposal_payload(row: Any) -> dict[str, Any]:
+    command = (row.draft_json or {}).get("command", {})
+    payload = command.get("payload", {}) if isinstance(command, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _proposal_title(row: Any) -> str:
+    payload = _proposal_payload(row)
+    title = payload.get("title") or payload.get("name")
+    if title:
+        return str(title)
+    summary = str(getattr(row, "summary", "") or "")
+    summary = re.sub(r"^Create task:\s*", "", summary, flags=re.I)
+    summary = re.sub(r"^Mark task done:\s*", "", summary, flags=re.I)
+    summary = re.sub(r"^Create recurring reminder:\s*", "", summary, flags=re.I)
+    return summary or "the item"
+
+
+def _friendly_due(payload: dict[str, Any]) -> str | None:
+    value = payload.get("due_at")
+    if not value:
+        schedule = payload.get("schedule") or payload.get("schedule_json") or {}
+        if isinstance(schedule, dict):
+            value = schedule.get("run_at")
+    if not value:
+        return None
+    text = str(value)
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return dt.strftime("%A at %-I:%M %p")
+
+
+def _command_status_value(value: object) -> str:
+    return str(getattr(value, "value", value))
+
+
 def _result(
     *,
     status: str,
     final_message_md: str | None,
     what_i_did_md: str | None,
     review_item_id: str | None = None,
+    review_item_ids: list[str] | None = None,
     clarifying_questions: list[str] | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     handoffs: list[dict[str, Any]] | None = None,
     autonomous_actions: list[dict[str, Any]] | None = None,
+    action_proposals: list[dict[str, Any]] | None = None,
+    action_plan: dict[str, Any] | None = None,
     memory_candidates: list[dict[str, Any]] | None = None,
     preference_candidates: list[dict[str, Any]] | None = None,
     audit_refs: list[str] | None = None,
@@ -1016,10 +1756,13 @@ def _result(
         "final_message_md": final_message_md,
         "what_i_did_md": what_i_did_md,
         "review_item_id": review_item_id,
+        "review_item_ids": review_item_ids or ([review_item_id] if review_item_id else []),
         "clarifying_questions": clarifying_questions or [],
         "tool_calls": tool_calls or [],
         "handoffs": handoffs or [],
         "autonomous_actions": autonomous_actions or [],
+        "action_proposals": action_proposals or [],
+        "action_plan": action_plan or {},
         "memory_candidates": memory_candidates or [],
         "preference_candidates": preference_candidates or [],
         "audit_refs": audit_refs or [],
@@ -1032,6 +1775,7 @@ def _run_status_from_result(result_status: str) -> str:
         "final": "completed",
         "needs_clarification": "needs_clarification",
         "needs_approval": "waiting_approval",
+        "waiting_confirmation": "waiting_confirmation",
         "failed": "failed",
         "max_iterations": "max_iterations",
     }.get(result_status, "completed")

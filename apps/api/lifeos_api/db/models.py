@@ -256,6 +256,26 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PendingActionProposal(Base):
+    __tablename__ = "pending_action_proposals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("agent_sessions.id"))
+    source_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"))
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    agent_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    proposal_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    draft_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_revised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    executed_command_id: Mapped[str | None] = mapped_column(ForeignKey("state_changes.id"))
+    review_item_id: Mapped[str | None] = mapped_column(ForeignKey("review_items.id"))
+
+
 class AgentRun(Base, TimestampMixin):
     __tablename__ = "agent_runs"
 

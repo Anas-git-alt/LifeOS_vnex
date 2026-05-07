@@ -9,7 +9,7 @@ import platform
 import threading
 import time
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -17,6 +17,7 @@ from discord_gateway.api_client import LifeOSApiClient
 
 DISCORD_API = "https://discord.com/api/v10"
 DECISIONS = {"approve", "reject", "correct", "clarify", "snooze", "done"}
+USER_AGENT = "LifeOS-vNext (https://lifeos.local, 0.1)"
 
 
 def validate_config() -> list[str]:
@@ -47,7 +48,7 @@ def discord_request(token: str, method: str, path: str, payload: dict[str, Any] 
         headers={
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
-            "User-Agent": "LifeOS-vNext (https://lifeos.local, 0.1)",
+            "User-Agent": USER_AGENT,
         },
         method=method,
     )
@@ -83,10 +84,14 @@ def respond_interaction(
     request = Request(
         f"{DISCORD_API}/interactions/{interaction_id}/{interaction_token}/callback",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
         method="POST",
     )
-    with urlopen(request, timeout=10):  # noqa: S310
+    with urlopen(request, timeout=15):  # noqa: S310
         return
 
 
@@ -98,7 +103,7 @@ def edit_interaction_response(
     request = Request(
         f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}/messages/@original",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="PATCH",
     )
     with urlopen(request, timeout=15):  # noqa: S310
@@ -424,19 +429,29 @@ def handle_interaction(token: str, client: LifeOSApiClient, data: dict[str, Any]
                 token,
                 interaction_id,
                 interaction_token,
-                ephemeral(f"Processing review {payload['decision']}..."),
+                ephemeral(
+                    f"Processing {'proposal' if payload['type'] == 'proposal_decision' else 'review'} "
+                    f"{payload['decision']}..."
+                ),
             )
             acknowledged = True
 
             try:
-                result = client.post(
-                    f"/api/reviews/{quote(str(payload['review_id']))}/decision",
-                    payload["payload"],
-                )
-                text = f"Review {payload['decision']}: {result.get('status')}"
+                if payload["type"] == "proposal_decision":
+                    result = client.post(
+                        f"/api/action-proposals/{quote(str(payload['proposal_id']))}/decision",
+                        payload["payload"],
+                    )
+                    text = f"Proposal {payload['decision']}: {result.get('status')}"
+                else:
+                    result = client.post(
+                        f"/api/reviews/{quote(str(payload['review_id']))}/decision",
+                        payload["payload"],
+                    )
+                    text = f"Review {payload['decision']}: {result.get('status')}"
             except Exception as exc:  # noqa: BLE001
-                text = f"LifeOS review decision failed: {exc}"
-                print(f"discord-gateway review decision error: {exc}", flush=True)
+                text = f"LifeOS decision failed: {exc}"
+                print(f"discord-gateway decision error: {exc}", flush=True)
 
             channel_id = data.get("channel_id")
             if channel_id:
@@ -615,14 +630,31 @@ def parse_lifeos_command(data: dict[str, Any]) -> dict[str, Any]:
 
 def handle_component(data: dict[str, Any]) -> dict[str, Any]:
     custom_id = str(data.get("data", {}).get("custom_id", ""))
-    _, area, decision, review_id = custom_id.split(":", 3)
+    _, area, decision, target_id = custom_id.split(":", 3)
+    if area == "proposal":
+        if decision == "edit":
+            return {"type": "modal", "payload": proposal_edit_modal_payload(target_id)}
+        if decision not in {"create", "ignore"}:
+            raise ValueError("Unknown proposal action")
+        api_decision = "approve" if decision == "create" else "reject"
+        return {
+            "type": "proposal_decision",
+            "proposal_id": target_id,
+            "decision": decision,
+            "payload": {
+                "decision": api_decision,
+                "decision_payload": {},
+                "source_platform": "discord",
+                "source_external_message_id": str(data.get("message", {}).get("id") or data.get("id")),
+            },
+        }
     if area != "review" or decision not in DECISIONS:
         raise ValueError("Unknown review action")
     if decision in {"correct", "clarify"}:
-        return {"type": "modal", "payload": modal_payload(decision, review_id)}
+        return {"type": "modal", "payload": modal_payload(decision, target_id)}
     return {
         "type": "decision",
-        "review_id": review_id,
+        "review_id": target_id,
         "decision": decision,
         "payload": {
             "decision": decision,
@@ -635,10 +667,23 @@ def handle_component(data: dict[str, Any]) -> dict[str, Any]:
 
 def handle_modal(client: LifeOSApiClient, data: dict[str, Any]) -> str:
     custom_id = str(data.get("data", {}).get("custom_id", ""))
+    text = modal_text(data)
+    if custom_id.startswith("lifeos:proposal_modal:edit:"):
+        proposal_id = custom_id.split(":", 3)[3]
+        result = client.post(
+            f"/api/action-proposals/{quote(proposal_id)}/decision",
+            {
+                "decision": "revise",
+                "decision_text": text,
+                "decision_payload": {},
+                "source_platform": "discord",
+                "source_external_message_id": str(data.get("message", {}).get("id") or data.get("id")),
+            },
+        )
+        return f"Proposal edit: {result.get('status')}. Say `yes` or use Create when it looks right."
     _, area, decision, review_id = custom_id.split(":", 3)
     if area != "modal" or decision not in {"correct", "clarify"}:
         raise ValueError("Unknown modal")
-    text = modal_text(data)
     result = client.post(
         f"/api/reviews/{quote(review_id)}/decision",
         {
@@ -678,6 +723,31 @@ def modal_payload(decision: str, review_id: str) -> dict[str, Any]:
     }
 
 
+def proposal_edit_modal_payload(proposal_id: str) -> dict[str, Any]:
+    return {
+        "type": 9,
+        "data": {
+            "custom_id": f"lifeos:proposal_modal:edit:{proposal_id}",
+            "title": "Edit LifeOS proposal",
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 4,
+                            "custom_id": "text",
+                            "style": 2,
+                            "label": "Adjustment",
+                            "required": True,
+                            "max_length": 1000,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
 def modal_text(data: dict[str, Any]) -> str:
     for row in data.get("data", {}).get("components", []):
         for component in row.get("components", []):
@@ -699,12 +769,12 @@ def handle_message(token: str, client: LifeOSApiClient, data: dict[str, Any], ow
                 add_reaction(token, channel_id, str(data.get("id")), "👀")
             except Exception:  # noqa: BLE001 - reaction is best effort
                 pass
-            response = run_chat_message(client, data)
+            payload = run_chat_message_payload(client, data)
         else:
-            response = run_legacy_command(client, command, data)
+            payload = {"content": run_legacy_command(client, command, data)[:1900]}
     except Exception as exc:  # noqa: BLE001
-        response = f"LifeOS failed: {exc}"
-    post_discord_message(token, channel_id, {"content": response[:1900]})
+        payload = {"content": f"LifeOS failed: {exc}"[:1900]}
+    post_discord_message(token, channel_id, payload)
 
 
 def parse_legacy_command(content: str) -> dict[str, str] | None:
@@ -751,6 +821,10 @@ def run_legacy_command(client: LifeOSApiClient, command: dict[str, str], message
 
 
 def run_chat_message(client: LifeOSApiClient, message_data: dict[str, Any]) -> str:
+    return str(run_chat_message_payload(client, message_data).get("content") or "")
+
+
+def run_chat_message_payload(client: LifeOSApiClient, message_data: dict[str, Any]) -> dict[str, Any]:
     response = client.post(
         "/api/chat",
         {
@@ -763,7 +837,7 @@ def run_chat_message(client: LifeOSApiClient, message_data: dict[str, Any]) -> s
             "metadata": {"owner_authenticated": True},
         },
     )
-    return format_chat_response(response)
+    return chat_response_payload(response)
 
 
 def help_text() -> str:
@@ -825,6 +899,59 @@ def format_chat_response(response: dict[str, object]) -> str:
     run_id = response.get("run_id")
     suffix = f"\n\n`run`: {run_id} · `{status}`" if run_id else f"\n\n`{status}`"
     return (answer + suffix)[:1900]
+
+
+def chat_response_payload(response: dict[str, object]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"content": format_chat_response(response)}
+    result = response.get("result", {})
+    proposals = result.get("action_proposals", []) if isinstance(result, dict) else []
+    pending = [
+        proposal
+        for proposal in proposals
+        if isinstance(proposal, dict) and proposal.get("id") and proposal.get("status") in {"pending", "revised"}
+    ]
+    if pending:
+        payload["embeds"] = [action_proposal_embed(pending)]
+        payload["components"] = action_proposal_components(pending)
+    return payload
+
+
+def action_proposal_embed(proposals: list[dict[str, object]]) -> dict[str, Any]:
+    lines = []
+    for index, proposal in enumerate(proposals, start=1):
+        lines.append(f"**{index}. {proposal.get('summary')}**")
+        lines.append(f"`risk`: {proposal.get('risk')}  `status`: {proposal.get('status')}")
+    return {
+        "title": "Action proposal",
+        "description": "\n".join(lines)[:3900],
+        "color": 0x2F855A,
+    }
+
+
+def action_proposal_components(proposals: list[dict[str, object]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def button(label: str, action: str, proposal_id: str, style: int) -> dict[str, Any]:
+        return {
+            "type": 2,
+            "style": style,
+            "label": label,
+            "custom_id": f"lifeos:proposal:{action}:{proposal_id}",
+        }
+
+    for proposal in proposals[:5]:
+        proposal_id = str(proposal.get("id"))
+        rows.append(
+            {
+                "type": 1,
+                "components": [
+                    button("Create", "create", proposal_id, 3),
+                    button("Edit", "edit", proposal_id, 2),
+                    button("Ignore", "ignore", proposal_id, 4),
+                ],
+            }
+        )
+    return rows
 
 
 def status_text(client: LifeOSApiClient) -> str:
