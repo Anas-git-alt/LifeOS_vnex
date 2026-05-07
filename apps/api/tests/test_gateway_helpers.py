@@ -1,6 +1,8 @@
 from discord_gateway.main import (
+    chat_response_payload,
     format_chat_response,
     format_review_card,
+    handle_component,
     parse_legacy_command,
     parse_lifeos_command,
 )
@@ -79,6 +81,50 @@ def test_discord_review_card_has_buttons() -> None:
 
     assert "lifeos:review:approve:rev_1" in custom_ids
     assert "lifeos:review:correct:rev_1" in custom_ids
+
+
+def test_discord_inline_proposal_card_has_buttons() -> None:
+    payload = chat_response_payload(
+        {
+            "answer": "I can create a task.",
+            "run_id": "run_1",
+            "status": "waiting_confirmation",
+            "result": {
+                "action_proposals": [
+                    {
+                        "id": "aprop_1",
+                        "summary": "Create task: take suit to ironing shop",
+                        "risk": "low",
+                        "status": "pending",
+                    }
+                ]
+            },
+        }
+    )
+    custom_ids = [
+        component["custom_id"]
+        for row in payload["components"]
+        for component in row["components"]
+    ]
+
+    assert payload["embeds"][0]["title"] == "Action proposal"
+    assert "lifeos:proposal:create:aprop_1" in custom_ids
+    assert "lifeos:proposal:edit:aprop_1" in custom_ids
+    assert "lifeos:proposal:ignore:aprop_1" in custom_ids
+
+
+def test_discord_proposal_button_maps_to_action_proposal_decision() -> None:
+    payload = handle_component(
+        {
+            "id": "interaction_1",
+            "message": {"id": "message_1"},
+            "data": {"custom_id": "lifeos:proposal:create:aprop_1"},
+        }
+    )
+
+    assert payload["type"] == "proposal_decision"
+    assert payload["proposal_id"] == "aprop_1"
+    assert payload["payload"]["decision"] == "approve"
 
 
 def test_telegram_reply_mapping() -> None:

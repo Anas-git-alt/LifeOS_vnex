@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from lifeos_api.config import get_settings
 from lifeos_api.db.session import create_engine, create_sessionmaker
 from lifeos_api.routers import (
+    action_proposals,
     ask,
     agents,
     audit,
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api", tags=["health"])
     app.include_router(ask.router, prefix="/api", tags=["ask"])
     app.include_router(captures.router, prefix="/api", tags=["captures"])
+    app.include_router(action_proposals.router, prefix="/api", tags=["action-proposals"])
     app.include_router(reviews.router, prefix="/api", tags=["reviews"])
     app.include_router(sessions.router, prefix="/api", tags=["sessions"])
     app.include_router(runs.router, prefix="/api", tags=["runs"])
